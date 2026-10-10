@@ -71,10 +71,11 @@ delta = {}
 
 # --- fathom's own tools, by SPEC class ---
 #
-# SPEC §4/§8 classes map to tiers: `read` runs, `observe` runs at this
-# layer (fathom's engine still default-denies observe/execute without
-# a config allowlist — this gate allowing a call does not run it), and
-# `execute` needs the human. The port's catalog has exactly one
+# SPEC §4/§8 classes map to tiers: `read` runs, `observe` needs the
+# human at this layer too (Matt's ruling 2026-10-10: the APPA layer
+# mirrors SPEC §8, which default-denies observe/execute without a
+# config allowlist), and `execute` needs the human. The port's
+# catalog has exactly one
 # execute tool, capture_process, and its SPEC default-deny is
 # preserved here as a hard rule: a worker session never runs it.
 # The upstream mutate-provider-state class (Ghidra annotations and
@@ -154,6 +155,7 @@ delta = {}
 
 [[policy.tool]]
 name = "mcp/fathom/observe_browser"
+requires = { attention = ["hitl"] }
 delta = {}
 
 [[policy.tool]]

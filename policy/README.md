@@ -18,9 +18,10 @@ repo:
   `git reset`, `git clean`, `git push`, `gh`, `sudo`) with
   `attention = ["blocked"]`: no authority can permit them.
 - **Fathom's tool tiers** — SPEC classes mapped to tiers: `read`
-  tools run; `observe_browser` runs at this layer (fathom's engine
-  still default-denies observe/execute without a config allowlist,
-  so an APPA allow does not by itself run it); `capture_process`,
+  tools run; `observe_browser` needs the human at this layer too,
+  mirroring SPEC §8 (the engine default-denies observe/execute
+  without a config allowlist — Matt's ruling 2026-10-10);
+  `capture_process`,
   the catalog's only `execute` tool, is a hard deny — its SPEC
   default-deny preserved in policy form. The upstream
   mutate-provider-state class was not ported, so it has no rules;
