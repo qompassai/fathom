@@ -7,7 +7,7 @@ bloch-last.json
 bloch-summary.md
 
 # Analysis state never belongs in the repo
-*.rea-state/
+*.fathom-state/
 state/
 
 # Editor / tooling residue

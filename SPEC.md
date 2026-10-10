@@ -1,4 +1,4 @@
-# rea-rust — Specification
+# fathom — Specification
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
@@ -144,7 +144,7 @@ pinned in `Cargo.lock` and built offline thereafter.
 | Binary formats (layout) | goblin 0.10.7; object 0.40.0; pelite 0.10.0 | **Adopt goblin.** ELF/Mach-O/PE parsing in one crate; object is the better *writer's* library and we only read; pelite is PE-only and cannot serve ELF/Mach-O paths. |
 | Deep native analysis | Ghidra 12.1.2 headless (host); Hopper (no Linux automation story); IDA (licensed, GUI-bound) | **Drive Ghidra headless** (§9.1). Reimplementing a decompiler is not a port; upstream itself is a provider shell over engines. |
 | Browser observation | chromiumoxide 0.9.1; raw CDP over websocket by hand | chromiumoxide is viable and maintained; the scenario/session engine around it is a program of its own → **scaffold in this run**, adopt chromiumoxide when the stage is built. |
-| MCP transport | rmcp 3.5.1 (official Rust SDK); hand-rolled JSON-RPC | **Hand-roll.** The wire surface rea-rust needs (initialize, tools/list, tools/call, ping over stdio + one HTTP POST route) is small; hand-rolling keeps the transport auditable and immune to SDK churn. Trade-off named: protocol upgrades are our work. |
+| MCP transport | rmcp 3.5.1 (official Rust SDK); hand-rolled JSON-RPC | **Hand-roll.** The wire surface fathom needs (initialize, tools/list, tools/call, ping over stdio + one HTTP POST route) is small; hand-rolling keeps the transport auditable and immune to SDK churn. Trade-off named: protocol upgrades are our work. |
 | A2A card | a2a 0.1.0 (985 downloads, placeholder); hand-rolled per estate pattern | **Hand-roll**, following the volta/vongola pattern: JCS-canonicalized card, Ed25519 signature. |
 | JCS canonicalization | serde_jcs 0.2.0; hand-rolled RFC 8785 | **Hand-roll** with the RFC 8785 test vectors as unit tests; one less dependency for ~100 lines with a public test suite. |
 | .NET metadata | pelite (PE only, no CLI tables); a dedicated ECMA-335 crate (none mature found) | **Manual ECMA-335 parsing** over goblin's PE headers: metadata root, streams, table row geometry, TypeDef/MethodDef/ImplMap reads. The format is a published standard (ECMA-335); the parser is bounded and testable against fixtures. |
@@ -238,7 +238,7 @@ Deterministic, fail-closed, evaluated before every handler:
   `session_info`.
 - **State directory.** All analysis state (Ghidra projects,
   extraction, caches) lives under one state dir
-  (`$XDG_STATE_HOME/rea-rust` or config). Providers write nowhere
+  (`$XDG_STATE_HOME/fathom` or config). Providers write nowhere
   else; extraction targets are created under it with generated
   names, never from target-supplied paths.
 - **Bounds.** Named constants, enforced before the costly step:
@@ -283,7 +283,7 @@ Route decision, with reasons:
    fresh import (`artifact_changed` guards mid-run mutation: the
    subject is re-hashed after the run).
 
-The port's own script, `ReaExportAnalysis.java`, exports one JSON
+The port's own script, `FathomExportAnalysis.java`, exports one JSON
 document: program identity (name, format, language, image base),
 memory blocks, functions (entry, name, signature, external/thunk
 classification), symbols, defined strings, and — for one requested
@@ -362,7 +362,7 @@ decoded-CIL fingerprint is the stage that follows).
 
 ## 10. Surfaces
 
-- **CLI** (`rea-rust` binary): `serve` (MCP), `card`, `doctor`
+- **CLI** (`fathom` binary): `serve` (MCP), `card`, `doctor`
   (host/engine inventory: Ghidra discovery, versions, config
   validity — facts, not fixes), and one-shot forms of the read
   tools for terminal use, emitting the same evidence envelopes.
@@ -388,13 +388,13 @@ decoded-CIL fingerprint is the stage that follows).
 - **Stage 0** — this SPEC. Commit gate: SPEC complete.
 - **Stage 1** — scaffolding (estate `.ai`/`.claude`/`.opencode`/
   `.openshell`, licenses, flake, book) and core crates:
-  `rea-core` (config, errors, evidence, policy, registry,
-  confinement, bounded processes), `rea-mcp`, `rea-a2a`,
-  `rea-cli`. Gate: core test suite green.
-- **Stage 2** — first providers working: `rea-native` (Ghidra
-  batch export + goblin layout) and `rea-js` (oxc + ASAR), with
+  `fathom-core` (config, errors, evidence, policy, registry,
+  confinement, bounded processes), `fathom-mcp`, `fathom-a2a`,
+  `fathom-cli`. Gate: core test suite green.
+- **Stage 2** — first providers working: `fathom-native` (Ghidra
+  batch export + goblin layout) and `fathom-js` (oxc + ASAR), with
   live smokes on `/usr/bin/true` and a fixture Electron app.
-- **Stage 3** — `rea-managed` (.NET inventory) and `rea-observe`
+- **Stage 3** — `fathom-managed` (.NET inventory) and `fathom-observe`
   (process capture, HAR, EVM selectors) built; browser, firmware,
   Android, Apple-deep, CIL decode, PTY, source-map mapping, IDA/
   Hopper providers scaffolded with contracts and

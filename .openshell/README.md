@@ -1,4 +1,4 @@
-# OpenShell configuration for rea-rust
+# OpenShell configuration for fathom
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
@@ -11,8 +11,8 @@ kept with the diver configuration at
 gateway config at `~/.config/openshell/gateway.toml` (schema
 version 2, podman driver pinned, mTLS on by default).
 
-`gateway.toml.example` is that gateway shape carrying rea-rust's
-values, so a rea-rust development sandbox runs behind the same
+`gateway.toml.example` is that gateway shape carrying fathom's
+values, so a fathom development sandbox runs behind the same
 gateway conventions as the rest of the estate. It contains no
 secrets; real gateway state stays in the operator's home
 configuration, and TLS material is auto-generated under

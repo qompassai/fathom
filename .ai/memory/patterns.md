@@ -9,7 +9,7 @@ diver config, rust-analyzer/bacon-ls/crates-lsp, 0 errors),
 
 ## Ghidra runs
 
-- Provider locates `analyzeHeadless` via `REA_GHIDRA_HEADLESS`,
+- Provider locates `analyzeHeadless` via `FATHOM_GHIDRA_HEADLESS`,
   then `$PATH` (`ghidra-analyzeHeadless`), then
   `/opt/ghidra/support/analyzeHeadless`.
 - Projects live under `<state_dir>/ghidra/<sha256-prefix>/`;

@@ -38,7 +38,7 @@ description = "The example book covers examples."
 language = "en"
 src = "src"
 text-direction = "ltr"
-title = "rea-rust — Reverse Engineer Anything (Rust port)"
+title = "fathom — Reverse Engineer Anything (Rust port)"
 
 [build]
 build-dir = "book"

@@ -1,6 +1,6 @@
 # Overview
 
-`rea-rust` is a clean-room Rust port of REA (Reverse Engineer
+`fathom` is a clean-room Rust port of REA (Reverse Engineer
 Anything). It gives agents and operators reverse-engineering tools
 over MCP (stdio and streamable HTTP) and advertises them with a
 signed A2A agent card.

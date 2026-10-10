@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
-# Example OpenShell gateway profile for rea-rust development.
+# Example OpenShell gateway profile for fathom development.
 #
 # This file follows the estate OpenShell pattern: the gateway
 # configuration reference kept with the diver configuration
 # (agents/openshell/CONFIGURATION.md) and the operator's active
 # gateway config (~/.config/openshell/gateway.toml, schema
 # version 2). Copy it to ~/.config/openshell/gateway.toml on a
-# rea-rust development host (or point OPENSHELL_GATEWAY_CONFIG
+# fathom development host (or point OPENSHELL_GATEWAY_CONFIG
 # at it) and adjust values there; the copy in this repo is an
 # example, never the active file. It contains no secrets: TLS
 # material is auto-generated under ~/.local/state/openshell/tls/
@@ -31,12 +31,12 @@ supervisor_image = "ghcr.io/nvidia/openshell/supervisor:latest"
 bind_address = "127.0.0.1:17670"
 compute_driver = "podman"
 # mTLS is on by default: the gateway requires a valid client
-# certificate for all API connections. The "rea-rust-dev" sandbox
+# certificate for all API connections. The "fathom-dev" sandbox
 # name from the originated sketch is a CLI concern at sandbox
 # creation time; the gateway schema carries no per-sandbox name.
 # WARNING: disabling TLS leaves the gateway API with no
 # authentication. Keep bind_address on 127.0.0.1. Unset by
-# default; never set it for rea-rust gateways.
+# default; never set it for fathom gateways.
 # disable_tls = true
 # Client TLS material bind-mounted into sandbox containers
 # (auto-generated paths used when unset).

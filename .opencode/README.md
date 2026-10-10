@@ -1,4 +1,4 @@
-# Agent configuration for rea-rust
+# Agent configuration for fathom
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->

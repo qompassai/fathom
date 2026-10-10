@@ -1,4 +1,4 @@
-# rea-rust
+# fathom
 
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
@@ -26,15 +26,15 @@ supply chain — the estate's standing direction (SPEC §1).
 
 ## Shape
 
-- `rea-core` — config, error contracts, evidence model, policy,
+- `fathom-core` — config, error contracts, evidence model, policy,
   tool registry, confinement, bounded processes.
-- `rea-mcp` — MCP stdio + streamable HTTP transports.
-- `rea-a2a` — signed A2A agent card (JCS + Ed25519).
-- `rea-native` — Ghidra headless provider + binary layout (goblin).
-- `rea-js` — JavaScript/Electron static analysis (oxc) + ASAR.
-- `rea-managed` — .NET PE/CLI metadata (manual ECMA-335).
-- `rea-observe` — process capture, HAR reading, EVM selectors.
-- `rea-cli` — the `rea-rust` binary (`serve`, `card`, `doctor`,
+- `fathom-mcp` — MCP stdio + streamable HTTP transports.
+- `fathom-a2a` — signed A2A agent card (JCS + Ed25519).
+- `fathom-native` — Ghidra headless provider + binary layout (goblin).
+- `fathom-js` — JavaScript/Electron static analysis (oxc) + ASAR.
+- `fathom-managed` — .NET PE/CLI metadata (manual ECMA-335).
+- `fathom-observe` — process capture, HAR reading, EVM selectors.
+- `fathom-cli` — the `fathom` binary (`serve`, `card`, `doctor`,
   one-shot analysis).
 
 ## Build
