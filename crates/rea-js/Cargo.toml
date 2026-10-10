@@ -7,5 +7,11 @@ rust-version.workspace = true
 description = "rea-rust JavaScript/Electron provider: oxc static analysis and ASAR archives"
 
 [dependencies]
+oxc_allocator.workspace = true
+oxc_ast.workspace = true
+oxc_ast_visit.workspace = true
+oxc_parser.workspace = true
+oxc_span.workspace = true
 rea-core = { path = "../rea-core" }
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

@@ -4,9 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "rea-rust native provider: Ghidra headless batch export, goblin binary layout, artifact inventory"
+description = "rea-rust native-binary provider: Ghidra headless analysis, artifact and layout inspection"
 
 [dependencies]
+goblin = "0.10"
 rea-core = { path = "../rea-core" }
-serde.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

@@ -19,6 +19,9 @@ pub const FUNCTION_COUNT_MAX: usize = 5_000;
 /// Default wall-clock bound for one Ghidra provider run, seconds.
 pub const GHIDRA_TIMEOUT_SECS: u64 = 330;
 
+/// Listing instructions retained in one function dossier.
+pub const INSTRUCTION_COUNT_MAX: usize = 2_000;
+
 /// Bytes captured from one child-process stream.
 pub const OUTPUT_BYTES_MAX: usize = 8_388_608;
 
@@ -30,6 +33,9 @@ pub const PROCESS_TIMEOUT_SECS: u64 = 60;
 
 /// Strings retained from one program inventory.
 pub const STRING_COUNT_MAX: usize = 5_000;
+
+/// Symbols retained from one program inventory.
+pub const SYMBOL_COUNT_MAX: usize = 20_000;
 
 /// Bytes in one analysis target (hashed and read by providers).
 pub const TARGET_BYTES_MAX: u64 = 536_870_912;

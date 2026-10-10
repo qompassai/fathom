@@ -1,35 +1,43 @@
-//! rea-js: JavaScript / Electron static analysis.
+//! JavaScript/Electron provider (SPEC §9.2).
 //!
-//! oxc parses; the module graph resolves relative specifiers;
-//! Electron IPC boundaries are AST-derived; ASAR archives are
-//! read by an in-tree implementation of the format (SPEC §9.2).
-//! Stage 1 registers the catalog as scaffolds; stage 2 builds
-//! the handlers.
+//! oxc parses each module; facts are imports, exports, the
+//! module graph, and the Electron boundary (IPC channels,
+//! `contextBridge` exposures, window preferences). ASAR archives
+//! are read by a hand-implemented reader for the pickle-framed
+//! format, cross-validated against archives produced by the real
+//! `@electron/asar` tool (fixture test).
+
 #![forbid(unsafe_code)]
+
+pub mod analyzer;
+pub mod app;
+pub mod asar;
+
+use std::sync::Arc;
 
 use rea_core::policy::ToolClass;
 use rea_core::registry::{Registry, descriptor, target_schema};
 
-/// Register this provider's tools with the registry.
+/// Register the JavaScript provider's tools, all implemented.
 pub fn register(registry: &mut Registry) {
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "analyze_javascript_application",
             ToolClass::Read,
-            "js",
-            "Module graph, imports/exports, and Electron boundaries of an app directory or ASAR",
+            "javascript",
+            "Static analysis of a JS/Electron application: modules, graph, IPC boundaries",
             target_schema(),
         ),
-        "§9.2",
+        Arc::new(app::analyze_javascript_application),
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "inspect_asar",
             ToolClass::Read,
-            "js",
+            "asar",
             "ASAR archive inventory: entries, sizes, offsets, unpacked flags",
             target_schema(),
         ),
-        "§9.2",
+        Arc::new(asar::inspect_asar),
     );
 }
