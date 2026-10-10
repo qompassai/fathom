@@ -7,7 +7,12 @@ no TypeScript transliterated.
 ## Status (2026-10-10)
 
 - Stage 0 (SPEC.md) committed.
-- Stage 1 (scaffolding + core crates) in progress.
+- Stage 1 (scaffolding + core crates) committed.
+- Stage 2 (native Ghidra/goblin, JS/Electron oxc/ASAR) committed.
+- Stage 3 built: rea-managed .NET inventory (manual ECMA-335;
+  CIL decode scaffolded) and rea-observe capture_process
+  (allow_programs-gated), HAR reading, EVM selector scan.
+  Browser, firmware, Android stay scaffolded per SPEC 9.4.
 - Local commits only. No remote exists; repo name and GitHub
   creation are Matt's call at delivery.
 

@@ -1148,7 +1148,9 @@ dependencies = [
 name = "rea-managed"
 version = "0.1.0"
 dependencies = [
+ "goblin",
  "rea-core",
+ "serde",
  "serde_json",
 ]
 

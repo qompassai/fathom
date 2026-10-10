@@ -1,10 +1,16 @@
 //! rea-observe: runtime and capture providers (SPEC §9.4).
 //!
 //! `capture_process` (execute class, default-deny), HAR capture
-//! reading, EVM selector extraction, and the scaffolded
-//! browser / firmware / Android providers. Stage 1 registers the
-//! catalog as scaffolds; stage 3 builds the handlers.
+//! reading, and EVM selector extraction are built. The browser,
+//! firmware, and Android providers stay scaffolded: their
+//! engines are caller-supplied and not built in this stage.
 #![forbid(unsafe_code)]
+
+mod capture;
+mod evm;
+mod har;
+
+use std::sync::Arc;
 
 use rea_core::policy::ToolClass;
 use rea_core::registry::{Registry, descriptor, target_schema};
@@ -12,7 +18,7 @@ use serde_json::json;
 
 /// Register this provider's tools with the registry.
 pub fn register(registry: &mut Registry) {
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "capture_process",
             ToolClass::Execute,
@@ -32,7 +38,7 @@ pub fn register(registry: &mut Registry) {
                 "additionalProperties": false,
             }),
         ),
-        "§9.4",
+        Arc::new(capture::capture_process),
     );
     registry.register_not_implemented(
         descriptor(
@@ -44,7 +50,7 @@ pub fn register(registry: &mut Registry) {
         ),
         "§9.4",
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "inspect_evm_bytecode",
             ToolClass::Read,
@@ -59,7 +65,7 @@ pub fn register(registry: &mut Registry) {
                 "additionalProperties": false,
             }),
         ),
-        "§9.4",
+        Arc::new(evm::inspect_evm_bytecode),
     );
     registry.register_not_implemented(
         descriptor(
@@ -71,7 +77,7 @@ pub fn register(registry: &mut Registry) {
         ),
         "§9.4",
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "inspect_web_capture",
             ToolClass::Read,
@@ -79,7 +85,7 @@ pub fn register(registry: &mut Registry) {
             "HAR capture reading: request/response inventory and payload exposure",
             target_schema(),
         ),
-        "§9.4",
+        Arc::new(har::inspect_web_capture),
     );
     registry.register_not_implemented(
         descriptor(

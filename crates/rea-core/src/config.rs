@@ -18,6 +18,8 @@ pub const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8731";
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
+    /// Program names `capture_process` may run (bare names).
+    pub allow_programs: Option<Vec<String>>,
     /// Tool names (observe/execute class) the operator allows.
     pub allow_tools: Option<Vec<String>>,
     /// Explicit path to Ghidra's `analyzeHeadless`.
@@ -35,6 +37,7 @@ pub struct ConfigFile {
 /// Validated runtime configuration.
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub allow_programs: Vec<String>,
     pub allow_tools: Vec<String>,
     pub ghidra_headless: Option<PathBuf>,
     pub http_bind: SocketAddr,
@@ -46,6 +49,17 @@ pub struct Config {
 impl Config {
     /// Build a validated config from the on-disk form.
     pub fn from_file_form(form: ConfigFile) -> Result<Config, ReaError> {
+        let mut allow_programs = form.allow_programs.unwrap_or_default();
+        allow_programs.sort();
+        allow_programs.dedup();
+        for name in &allow_programs {
+            if name.is_empty() {
+                return Err(ReaError::new(
+                    ErrorCode::ConfigurationInvalid,
+                    "allow_programs contains an empty program name",
+                ));
+            }
+        }
         let mut allow_tools = form.allow_tools.unwrap_or_default();
         allow_tools.sort();
         allow_tools.dedup();
@@ -85,6 +99,7 @@ impl Config {
         target_roots.sort();
         target_roots.dedup();
         Ok(Config {
+            allow_programs,
             allow_tools,
             ghidra_headless: form.ghidra_headless,
             http_bind,
@@ -122,6 +137,7 @@ impl Config {
     /// declares roots), no observe/execute tools allowed.
     pub fn restrictive_default() -> Config {
         Config {
+            allow_programs: Vec::new(),
             allow_tools: Vec::new(),
             ghidra_headless: None,
             http_bind: DEFAULT_HTTP_BIND.parse().expect("constant binds"),
@@ -184,9 +200,26 @@ mod tests {
     #[test]
     fn validation_defaults_are_restrictive() {
         let config = Config::from_toml_str("").unwrap();
+        assert!(config.allow_programs.is_empty());
         assert!(config.allow_tools.is_empty());
         assert!(config.target_roots.is_empty());
         assert!(config.http_bind_is_loopback());
+    }
+
+    #[test]
+    fn validation_allow_programs_are_sorted_and_deduped() {
+        let config =
+            Config::from_toml_str("allow_programs = [\"echo\", \"true\", \"echo\"]\n").unwrap();
+        assert_eq!(
+            config.allow_programs,
+            vec!["echo".to_string(), "true".to_string()]
+        );
+    }
+
+    #[test]
+    fn adversarial_empty_program_name_is_rejected() {
+        let err = Config::from_toml_str("allow_programs = [\"\"]\n").unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigurationInvalid);
     }
 
     #[test]
