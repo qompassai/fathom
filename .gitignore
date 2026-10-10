@@ -13,3 +13,5 @@ state/
 # Editor / tooling residue
 .bacon-locations
 *.rs.bk
+
+/result
