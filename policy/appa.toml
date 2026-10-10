@@ -1,0 +1,459 @@
+# Fathom worker profile for OpenAPPA (estate adaptation, 2026-10-10).
+#
+# Case: a dispatched Claude worker building and analyzing with fathom
+# (the Rust reverse-engineering tool provider) in this repository. This
+# profile is the estate's second deterministic gate, modeled on the
+# OpenAPPA pilot's image profile (~/openappa-pilot, appa 0.30.0 pinned
+# at 5060566a): it includes the claude-code battery and adds root rules
+# for this repo — its build workflows, fathom's own tool tiers, and the
+# data labels fathom's analysis artifacts carry.
+#
+# Root rules run before the included battery's rules, and the first
+# matching rule wins. Sections are ordered so a stricter rule is never
+# shadowed by a looser one: hard denies first, workflow allows last.
+# Where a root rule replaces a battery rule for a whole tool (the bare
+# Write and Edit gates), the battery's own ask-tier selectors are
+# mirrored above it, so no battery protection is weakened.
+#
+# Data labels: fathom's analysis artifacts — decompiled output, HAR
+# captures, process captures, Ghidra project data — live under the
+# fathom state dir ($XDG_STATE_HOME/fathom) and may carry target
+# secrets. Reading one narrows the session audience to `self`. While
+# narrowed, network destinations are refused and writes land only in
+# cleared destinations (the state dir and this repo's tree; both are
+# contained sinks — pushes out of them are hard-denied below).
+
+include = ["../../../../openappa-pilot/src/marketplace/batteries/claude-code/appa.toml"]
+
+[policy]
+version = 2
+trust_chain = ["suspicious", "trusted"]
+
+# --- destructive operations: hard deny, no remedy ---
+#
+# The pilot's set, in the pilot's spellings. `blocked` is the reserved
+# attention mark no authority can permit.
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*rm -rf*)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*rm -fr*)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*git reset*)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*git clean*)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*git push*)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:gh *)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*sudo *)"
+requires = { attention = ["blocked"] }
+delta = {}
+
+# --- fathom's own tools, by SPEC class ---
+#
+# SPEC §4/§8 classes map to tiers: `read` runs, `observe` runs at this
+# layer (fathom's engine still default-denies observe/execute without
+# a config allowlist — this gate allowing a call does not run it), and
+# `execute` needs the human. The port's catalog has exactly one
+# execute tool, capture_process, and its SPEC default-deny is
+# preserved here as a hard rule: a worker session never runs it.
+# The upstream mutate-provider-state class (Ghidra annotations and
+# bookmarks) was not ported — projects re-open read-only — so it has
+# no rules to write; a tool with no rule is undeclared in this policy
+# and refused, and any future tool lands at ask-tier first, through
+# the policy-change process in policy/README.md.
+
+[[policy.tool]]
+name = "mcp/fathom/capture_process"
+requires = { attention = ["blocked"] }
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/analyze_function"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/analyze_javascript_application"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/binary_overview"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/compare_artifacts"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/export_evidence_bundle"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_android_apk"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_artifact"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_asar"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_binary_layout"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_evm_bytecode"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_firmware"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_managed_assembly"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/inspect_web_capture"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/list_functions"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/list_names"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/list_strings"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/observe_browser"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/search_inventory"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/session_info"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/verify_evidence_bundle"
+delta = {}
+
+# --- analysis artifacts are sensitive: reading one narrows the
+# session audience to `self` ---
+#
+# Every surface that can pull artifact content into the trajectory is
+# labeled: Read, Grep, and Bash (cat/grep spellings) alike.
+
+[[policy.tool]]
+name = "host/claude-code/Read(file_path:*/.local/state/fathom/*)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Read(file_path:.local/state/fathom/*)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Read(file_path:*.har)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Read(file_path:*/captures/*)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Grep(path:*/.local/state/fathom/*)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Grep(path:*.har)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*/.local/state/fathom/*)"
+delta = { audience = ["self"] }
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*.har*)"
+delta = { audience = ["self"] }
+
+# --- network destinations: refused while the session carries
+# sensitive data ---
+#
+# Each rule requires the widest audience, so the call runs only when
+# nothing labeled has been read. At the default label these are
+# ordinary commands; after a sensitive read they are exfiltration.
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*curl*)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*wget*)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*nc *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*ncat *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*netcat *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*rsync *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*scp *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:*sftp *)"
+requires = { audience = { contains = ["public"] } }
+delta = {}
+
+# --- writes: the battery's ask-tier selectors, mirrored ---
+#
+# These six selectors per tool are the battery's own, with the
+# battery's own requirement, repeated here because root rules run
+# first: without the mirrors, the gated bare rules below would
+# shadow them.
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*/.claude/settings*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:.claude/settings*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*/appa/appa.toml)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*/appa/batteries/*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*.mcp.json)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*.claude/hooks/*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*/.claude/settings*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:.claude/settings*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*/appa/appa.toml)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*/appa/batteries/*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*.mcp.json)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*.claude/hooks/*)"
+requires = { attention = ["hitl"] }
+delta = {}
+
+# --- writes: cleared destinations stay open while narrowed ---
+#
+# The state dir (the artifacts' home) and this repo's tree. Selector
+# segments are exact: a lookalike such as `.local/state/fathom-evil`
+# does not match and falls through to the gated bare rules.
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*/.local/state/fathom/*)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Write(file_path:*/rea-rust/*)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*/.local/state/fathom/*)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit(file_path:*/rea-rust/*)"
+delta = {}
+
+# --- writes: everywhere else is gated on the label ---
+#
+# The bare rules. A write or edit outside the cleared destinations
+# needs a trusted session carrying nothing sensitive: at the default
+# label these are the worker's own writes and edits; after a
+# sensitive read they are label confusion and are refused. The
+# battery's trust-gated selectors (credential paths, shell startup
+# files, launch agents) require `trusted` too, so this gate is never
+# weaker than the battery rule it precedes.
+
+[[policy.tool]]
+name = "host/claude-code/Write"
+requires = { trust = "trusted", audience = { contains = ["public"] } }
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Edit"
+requires = { trust = "trusted", audience = { contains = ["public"] } }
+delta = {}
+
+# --- the repo's own workflows: allowed, label unchanged ---
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo build)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo build *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo clippy)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo clippy *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo fmt)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo fmt *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo test)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:cargo test *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:git diff)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:git diff *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:git log *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:git status)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:git status *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:mdbook build)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:mdbook build *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:nix build)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:nix build *)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:nix flake check)"
+delta = {}
+
+[[policy.tool]]
+name = "host/claude-code/Bash(command:nix flake check *)"
+delta = {}
+
+# --- the human authority ---
+#
+# Ask-tier requirements (`hitl`) are decided by the person running
+# the session. Declared here as in upstream's push-only-to-the-org
+# example: without a declared authority, an attention requirement
+# has no one who can permit it and the call is refused outright.
+
+[[policy.authority]]
+name = "hitl"
+hint = "Ask the person running this session."
+
+[policy.authority.permits]
+attention = ["hitl"]
+
+[externals]
+timeout_ms = 5000
+max_body_bytes = 65536

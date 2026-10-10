@@ -1,0 +1,8 @@
+# The execute tier, attempted without approval: capture_process is
+# fathom's only execute-class tool, and its SPEC default-deny is a
+# hard rule in this profile — not an ask, a refusal.
+
+mcp/fathom/capture_process {
+  program: "ls"
+}
+expect deny

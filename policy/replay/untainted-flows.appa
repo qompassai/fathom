@@ -1,0 +1,19 @@
+# The gates are label-driven, not tool bans: before anything
+# sensitive is read, a network fetch runs, an own-words write to a
+# scratch path lands, and an ordinary source read is unremarkable.
+
+host/claude-code/Bash {
+  command: "curl https://example.com/docs"
+}
+expect allow
+
+host/claude-code/Write {
+  file_path: "/tmp/fathom-scratch.md"
+  content: "the worker's own notes"
+}
+expect allow
+
+host/claude-code/Read {
+  file_path: "/home/phaedrus/workspace/repos/rea-rust/crates/fathom-core/src/lib.rs"
+}
+expect allow

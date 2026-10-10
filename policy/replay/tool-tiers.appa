@@ -1,0 +1,25 @@
+# Fathom's read-class tools run at this layer; so does its one
+# observe-class tool. (Fathom's engine still default-denies observe
+# and execute without a config allowlist — an APPA allow here does
+# not by itself run the tool.)
+
+mcp/fathom/inspect_binary_layout {
+  path: "/usr/bin/true"
+}
+expect allow
+
+mcp/fathom/analyze_function {
+  target: "/usr/bin/true"
+  function: "main"
+}
+expect allow
+
+mcp/fathom/inspect_web_capture {
+  path: "/home/phaedrus/targets/capture/session.har"
+}
+expect allow
+
+mcp/fathom/observe_browser {
+  url: "https://example.com"
+}
+expect allow

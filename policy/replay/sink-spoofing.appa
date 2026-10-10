@@ -1,0 +1,21 @@
+# Sink spoofing: a lookalike destination is not the cleared one.
+# `fathom-evil` does not match the state dir's exact selector
+# segment, so the write falls through to the gated bare rule and is
+# refused; the genuine state dir stays open.
+
+host/claude-code/Bash {
+  command: "cat /home/phaedrus/.local/state/fathom/projects/abc123/decompile.txt"
+}
+expect allow
+
+host/claude-code/Write {
+  file_path: "/home/phaedrus/.local/state/fathom-evil/session-notes.md"
+  content: "decompiled output"
+}
+expect deny
+
+host/claude-code/Write {
+  file_path: "/home/phaedrus/.local/state/fathom/notes/session-notes.md"
+  content: "decompiled output"
+}
+expect allow

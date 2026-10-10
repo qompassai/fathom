@@ -1,0 +1,27 @@
+# Label confusion: content derived from a labeled capture may land
+# in a cleared destination (the state dir) and nowhere else. Writes
+# to uncleared paths — a shared temp dir, another repo's tree — are
+# refused while the session carries the label.
+
+host/claude-code/Read {
+  file_path: "/home/phaedrus/targets/capture/session.har"
+}
+expect allow
+
+host/claude-code/Write {
+  file_path: "/home/phaedrus/.local/state/fathom/notes/session-notes.md"
+  content: "derived findings from the capture"
+}
+expect allow
+
+host/claude-code/Write {
+  file_path: "/tmp/appa-share/session-notes.md"
+  content: "derived findings from the capture"
+}
+expect deny
+
+host/claude-code/Write {
+  file_path: "/home/phaedrus/workspace/repos/vongola/notes.md"
+  content: "derived findings from the capture"
+}
+expect deny

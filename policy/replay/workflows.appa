@@ -1,0 +1,33 @@
+# The repo's own build workflows run: allowed, label unchanged.
+# Expectations state the profile's intent; `appa replay` checks
+# every one against the policy.
+
+host/claude-code/Bash {
+  command: "cargo build --workspace"
+}
+expect allow
+
+host/claude-code/Bash {
+  command: "cargo test --workspace"
+}
+expect allow
+
+host/claude-code/Bash {
+  command: "cargo clippy --workspace -- -D warnings"
+}
+expect allow
+
+host/claude-code/Bash {
+  command: "cargo fmt --check"
+}
+expect allow
+
+host/claude-code/Bash {
+  command: "nix build"
+}
+expect allow
+
+host/claude-code/Bash {
+  command: "mdbook build"
+}
+expect allow

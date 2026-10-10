@@ -1,0 +1,17 @@
+# Changing what the session itself may run needs the human: editing
+# the MCP configuration, or the session's own settings, is the
+# ask-tier surface (the battery's selectors, mirrored in the root
+# rules so the gate below cannot shadow them).
+
+host/claude-code/Edit {
+  file_path: ".mcp.json"
+  old_string: "\"fathom\": {}"
+  new_string: "\"fathom\": { \"args\": [\"mcp\"] }"
+}
+expect authority hitl
+
+host/claude-code/Write {
+  file_path: "/home/phaedrus/workspace/repos/rea-rust/.claude/settings.json"
+  content: "{}"
+}
+expect authority hitl
