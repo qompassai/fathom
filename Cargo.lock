@@ -498,6 +498,7 @@ name = "fathom-observe"
 version = "0.1.0"
 dependencies = [
  "fathom-core",
+ "serde",
  "serde_json",
 ]
 

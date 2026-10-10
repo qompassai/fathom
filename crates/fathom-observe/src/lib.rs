@@ -1,11 +1,13 @@
 //! fathom-observe: runtime and capture providers (SPEC §9.4).
 //!
 //! `capture_process` (execute class, default-deny), HAR capture
-//! reading, and EVM selector extraction are built. The browser,
-//! firmware, and Android providers stay scaffolded: their
-//! engines are caller-supplied and not built in this stage.
+//! reading, browser observation, and EVM selector extraction
+//! are built. The firmware and Android providers stay
+//! scaffolded: their engines are caller-supplied and not built
+//! in this stage.
 #![forbid(unsafe_code)]
 
+mod browser;
 mod capture;
 mod evm;
 mod har;
@@ -87,12 +89,12 @@ pub fn register(registry: &mut Registry) {
         ),
         Arc::new(har::inspect_web_capture),
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "observe_browser",
             ToolClass::Observe,
             "browser",
-            "CDP website observation: structure, scripts, network, screenshots on request",
+            "Chromium-headless page observation: title, meta, script, link, and form inventory from the serialized DOM",
             json!({
                 "type": "object",
                 "properties": {
@@ -102,6 +104,6 @@ pub fn register(registry: &mut Registry) {
                 "additionalProperties": false,
             }),
         ),
-        "§9.4",
+        Arc::new(browser::observe_browser),
     );
 }
