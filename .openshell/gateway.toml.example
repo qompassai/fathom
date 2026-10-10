@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+# Copyright (c) 2026 Qompass AI
+#
+# Example OpenShell gateway profile for rea-rust development.
+# Mirrors the machine-level gateway shape (~/.config/openshell/
+# gateway.toml, version 2); see README.md in this directory for why
+# this file is a reconciled equivalent, not a copied pattern.
+
+[gateway]
+address = "127.0.0.1:17670"
+driver = "podman"
+mtls = true
+version = 2
+
+[sandbox]
+name = "rea-rust-dev"

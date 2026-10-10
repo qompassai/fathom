@@ -1,0 +1,10 @@
+# #################################################################
+# /qompassai/rea-rust/rust-toolchain.toml
+# Qompass AI rea-rust — Toolchain Pin
+# SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+# Copyright (c) 2026 Qompass AI
+# #################################################################
+
+[toolchain]
+channel = "nightly-2026-09-25"
+components = ["clippy", "rustfmt"]

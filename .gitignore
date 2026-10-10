@@ -1,5 +1,6 @@
 # Build output
 /target
+docs/book/book/
 
 # Generated memory-index files (regenerate with: bloch . --update-memory)
 bloch-last.json

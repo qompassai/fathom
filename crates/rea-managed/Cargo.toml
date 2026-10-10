@@ -1,0 +1,11 @@
+[package]
+name = "rea-managed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "rea-rust managed provider: .NET PE/CLI metadata via manual ECMA-335 parsing"
+
+[dependencies]
+rea-core = { path = "../rea-core" }
+serde_json.workspace = true

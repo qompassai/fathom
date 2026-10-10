@@ -1,0 +1,24 @@
+[package]
+name = "rea-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "rea-rust binary: serve (MCP stdio/HTTP), card, doctor, one-shot tool calls"
+
+[[bin]]
+name = "rea-rust"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+rea-a2a = { path = "../rea-a2a" }
+rea-core = { path = "../rea-core" }
+rea-js = { path = "../rea-js" }
+rea-managed = { path = "../rea-managed" }
+rea-mcp = { path = "../rea-mcp" }
+rea-native = { path = "../rea-native" }
+rea-observe = { path = "../rea-observe" }
+serde_json.workspace = true
+tokio.workspace = true

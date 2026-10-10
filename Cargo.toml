@@ -1,0 +1,40 @@
+# #################################################################
+# /qompassai/rea-rust/Cargo.toml
+# Qompass AI rea-rust — Workspace
+# SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+# Copyright (c) 2026 Qompass AI
+#
+# Original work of Qompass AI (clean-room port, 2026-10-10).
+# Dual-licensed under AGPL-3.0-only OR Apache-2.0 at the
+# recipient's choice (see LICENSE, LICENSE-AGPL, NOTICE).
+# #################################################################
+
+[workspace]
+members = [
+    "crates/rea-a2a",
+    "crates/rea-cli",
+    "crates/rea-core",
+    "crates/rea-js",
+    "crates/rea-managed",
+    "crates/rea-mcp",
+    "crates/rea-native",
+    "crates/rea-observe",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "AGPL-3.0-only OR Apache-2.0"
+rust-version = "1.85"
+version = "0.1.0"
+
+[workspace.dependencies]
+axum = "0.8"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "time"] }
+toml = "1"

@@ -1,0 +1,12 @@
+[package]
+name = "rea-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "rea-rust native provider: Ghidra headless batch export, goblin binary layout, artifact inventory"
+
+[dependencies]
+rea-core = { path = "../rea-core" }
+serde.workspace = true
+serde_json.workspace = true

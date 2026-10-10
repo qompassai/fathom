@@ -1,0 +1,11 @@
+[package]
+name = "rea-js"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "rea-rust JavaScript/Electron provider: oxc static analysis and ASAR archives"
+
+[dependencies]
+rea-core = { path = "../rea-core" }
+serde_json.workspace = true
