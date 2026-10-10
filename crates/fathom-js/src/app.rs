@@ -17,6 +17,7 @@ use fathom_core::paths;
 use fathom_core::registry::{Registry, require_str};
 
 use crate::analyzer::{ModuleFacts, analyze_source};
+use crate::sourcemap::{MAP_BYTES_MAX, parse_source_map};
 
 const EXTENSIONS: [&str; 8] = ["js", "cjs", "mjs", "ts", "tsx", "jsx", "mts", "cts"];
 /// Per-module read bound; larger modules are reported, not parsed.
@@ -48,6 +49,7 @@ pub fn analyze_javascript_application(
     let mut unresolved = Vec::new();
     let mut external: BTreeSet<String> = BTreeSet::new();
     let mut source_maps = Vec::new();
+    let mut source_map_rows = Vec::new();
     let mut parse_error_rows = Vec::new();
     let mut electron_rows = Vec::new();
     let file_set: BTreeSet<PathBuf> = files.iter().cloned().collect();
@@ -55,7 +57,8 @@ pub fn analyze_javascript_application(
     for file in &files {
         let relative = relative_string(&root, file);
         if file.extension().is_some_and(|ext| ext == "map") {
-            source_maps.push(relative);
+            source_maps.push(relative.clone());
+            source_map_rows.push(source_map_row(file, relative));
             continue;
         }
         let metadata = fs::metadata(file).map_err(|e| {
@@ -160,13 +163,40 @@ pub fn analyze_javascript_application(
         evidence.add_finding(Finding::new(
             "source_maps",
             Confidence::Observed,
-            json!({"files": source_maps}),
+            json!({"files": source_maps, "maps": source_map_rows}),
         ));
     }
     evidence.coverage.examined = files.len() as u64;
     evidence.coverage.total = files.len() as u64;
     evidence.coverage.exhaustive = true;
     Ok(evidence.to_value())
+}
+
+/// One parsed source-map row for the `source_maps` finding. A map
+/// that does not parse is named with its typed error, never
+/// silently dropped (the SPEC §9.2 inventory rule).
+fn source_map_row(file: &Path, relative: String) -> Value {
+    let oversized = fs::metadata(file).is_ok_and(|metadata| metadata.len() > MAP_BYTES_MAX);
+    if oversized {
+        return json!({"error": "resource_constraint", "file": relative});
+    }
+    match fs::read_to_string(file) {
+        Ok(text) => match parse_source_map(&text) {
+            Ok(map) => json!({
+                "file": relative,
+                "names_count": map.names.len(),
+                "segment_count": map.segment_count,
+                "sources_count": map.sources.len(),
+                "sources_content_present": map
+                    .sources_content_present
+                    .iter()
+                    .filter(|present| **present)
+                    .count(),
+            }),
+            Err(error) => json!({"error": format!("{:?}", error.code), "file": relative}),
+        },
+        Err(_) => json!({"error": "unreadable", "file": relative}),
+    }
 }
 
 fn collect_modules(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<(), FathomError> {

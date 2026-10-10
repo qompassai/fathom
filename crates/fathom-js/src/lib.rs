@@ -12,11 +12,13 @@
 pub mod analyzer;
 pub mod app;
 pub mod asar;
+pub mod sourcemap;
 
 use std::sync::Arc;
 
 use fathom_core::policy::ToolClass;
 use fathom_core::registry::{Registry, descriptor, target_schema};
+use serde_json::json;
 
 /// Register the JavaScript provider's tools, all implemented.
 pub fn register(registry: &mut Registry) {
@@ -39,5 +41,24 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(asar::inspect_asar),
+    );
+    registry.register(
+        descriptor(
+            "inspect_source_map",
+            ToolClass::Read,
+            "javascript",
+            "Source-map v3 parsing: sources, sourcesContent presence, segments, and generated-to-original position mapping",
+            json!({
+                "type": "object",
+                "properties": {
+                    "generated_column": {"type": "integer", "minimum": 0},
+                    "generated_line": {"type": "integer", "minimum": 0},
+                    "target": {"type": "string", "description": "Path to a .map file under a configured target root"},
+                },
+                "required": ["target"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(sourcemap::inspect_source_map),
     );
 }
