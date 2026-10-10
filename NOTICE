@@ -1,0 +1,23 @@
+rea-rust — clean-room Rust port of REA (2026-10-10)
+====================================================
+
+The code in this repository is original work of Qompass AI. It is a
+spec-led reimplementation of the REA reverse-engineering agent tool
+(morluto/rea, MIT License), written from REA's published
+documentation and contracts — its MCP tool catalog and runtime
+contracts, tool-design guide, error-contract schema, architecture
+notes, and provider guides — and from the behavior those documents
+specify. No TypeScript source from morluto/rea was copied or
+transliterated. REA's design ideas (an evidence-carrying finding
+model, one provider-neutral MCP catalog, admitted per-provider
+semantics) are credited here and in SPEC.md as the design source,
+per the MIT terms under which those documents are published.
+
+Where this port deviates from upstream's design (stateless per-call
+tools instead of a bound binary session, a batch Ghidra export
+instead of a persistent bridge process), SPEC.md names the deviation
+and the reason.
+
+Licensing of this port: dual-licensed under AGPL-3.0-only OR
+Apache-2.0, at the recipient's choice. See LICENSE (Apache-2.0) and
+LICENSE-AGPL (AGPL-3.0) in this directory.

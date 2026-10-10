@@ -1,0 +1,14 @@
+# Build output
+/target
+
+# Generated memory-index files (regenerate with: bloch . --update-memory)
+bloch-last.json
+bloch-summary.md
+
+# Analysis state never belongs in the repo
+*.rea-state/
+state/
+
+# Editor / tooling residue
+.bacon-locations
+*.rs.bk
