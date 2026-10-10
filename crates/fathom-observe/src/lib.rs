@@ -1,15 +1,16 @@
 //! fathom-observe: runtime and capture providers (SPEC §9.4).
 //!
 //! `capture_process` (execute class, default-deny), HAR capture
-//! reading, browser observation, and EVM selector extraction
-//! are built. The firmware and Android providers stay
-//! scaffolded: their engines are caller-supplied and not built
-//! in this stage.
+//! reading, browser observation, firmware inspection, and EVM
+//! selector extraction are built. The Android provider stays
+//! scaffolded: its engine is caller-supplied and not built in
+//! this stage.
 #![forbid(unsafe_code)]
 
 mod browser;
 mod capture;
 mod evm;
+mod firmware;
 mod har;
 
 use std::sync::Arc;
@@ -69,15 +70,15 @@ pub fn register(registry: &mut Registry) {
         ),
         Arc::new(evm::inspect_evm_bytecode),
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "inspect_firmware",
             ToolClass::Read,
             "firmware",
-            "Firmware regions and extraction via caller-supplied Binwalk/Unblob engines",
+            "Firmware inspection: header/format detection, embedded-filesystem signature scan, entropy profile (no extraction)",
             target_schema(),
         ),
-        "§9.4",
+        Arc::new(firmware::inspect_firmware),
     );
     registry.register(
         descriptor(
