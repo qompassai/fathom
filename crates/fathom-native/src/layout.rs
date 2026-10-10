@@ -58,7 +58,7 @@ pub fn inspect_binary_layout(
             evidence.coverage.exhaustive = true;
         }
         Ok(goblin::Object::Elf(elf)) => elf_layout(&mut evidence, &elf),
-        Ok(goblin::Object::Mach(mach)) => mach_layout(&mut evidence, &mach),
+        Ok(goblin::Object::Mach(mach)) => mach_layout(&mut evidence, &mach, &bytes),
         Ok(goblin::Object::PE(pe)) => pe_layout(&mut evidence, &pe),
         Ok(goblin::Object::Unknown(magic)) => {
             evidence.add_finding(Finding::new(
@@ -185,38 +185,225 @@ fn elf_layout(evidence: &mut Evidence, elf: &goblin::elf::Elf) {
     evidence.coverage.exhaustive = true;
 }
 
-fn mach_layout(evidence: &mut Evidence, mach: &goblin::mach::Mach) {
+/// Names listed in the exports/imports samples of one Mach-O
+/// projection.
+const MACH_NAMES_LISTED_MAX: usize = 256;
+
+fn mach_layout(evidence: &mut Evidence, mach: &goblin::mach::Mach, bytes: &[u8]) {
     match mach {
         goblin::mach::Mach::Binary(binary) => {
             evidence.add_finding(Finding::new(
                 "layout",
                 Confidence::Observed,
                 json!({
+                    "cpu": mach_cpu_name(binary.header.cputype),
                     "cpu_type": binary.header.cputype,
+                    "file_type": mach_file_type_name(binary.header.filetype),
                     "format": "Mach-O",
+                    "is_64": binary.is_64,
+                    "little_endian": binary.little_endian,
                     "load_command_count": binary.load_commands.len(),
                 }),
             ));
-            evidence.add_unknown(
-                "mach_detail",
-                "Mach-O load-command detail is staged behind the binary inventory",
+            let (projection, export_error) = mach_projection(binary);
+            evidence.add_finding(
+                Finding::new("mach_dylib_projection", Confidence::Observed, projection)
+                    .with_limitation(
+                        "Projection lists the load commands, libraries, rpaths, and symbols the binary declares; it does not resolve the load graph against any filesystem.",
+                    ),
             );
+            if let Some(error) = export_error {
+                evidence.add_unknown(
+                    "mach_exports",
+                    format!("export trie did not decode: {error}"),
+                );
+            }
+            evidence.coverage.exhaustive = true;
         }
         goblin::mach::Mach::Fat(fat) => {
+            let arches = fat.arches().unwrap_or_default();
             evidence.add_finding(Finding::new(
                 "layout",
                 Confidence::Observed,
                 json!({
-                    "arch_count": fat.arches().map(|arches| arches.len()).unwrap_or(0),
+                    "arch_count": arches.len(),
+                    "architectures": arches
+                        .iter()
+                        .map(|arch| json!({
+                            "cpu": mach_cpu_name(arch.cputype),
+                            "cpu_type": arch.cputype,
+                            "offset": arch.offset,
+                            "size": arch.size,
+                        }))
+                        .collect::<Vec<_>>(),
                     "format": "Mach-O fat",
                 }),
             ));
-            evidence.add_unknown(
-                "mach_detail",
-                "per-architecture Mach-O detail is staged behind the binary inventory",
+            let mut projections = Vec::new();
+            let mut all_projected = true;
+            for arch in &arches {
+                match goblin::mach::MachO::parse(arch.slice(bytes), 0) {
+                    Ok(binary) => {
+                        let (mut projection, _) = mach_projection(&binary);
+                        if let Some(map) = projection.as_object_mut() {
+                            map.insert("cpu".to_string(), json!(mach_cpu_name(arch.cputype)));
+                        }
+                        projections.push(projection);
+                    }
+                    Err(error) => {
+                        all_projected = false;
+                        evidence.add_unknown(
+                            format!("mach_arch_{}", arch.cputype),
+                            format!("architecture slice did not parse: {error}"),
+                        );
+                    }
+                }
+            }
+            evidence.add_finding(
+                Finding::new(
+                    "mach_dylib_projection",
+                    Confidence::Observed,
+                    json!({"architectures": projections}),
+                )
+                .with_limitation(
+                    "Projection lists what each architecture slice declares; it does not resolve the load graph against any filesystem.",
+                ),
             );
+            evidence.coverage.exhaustive = all_projected;
         }
     }
+}
+
+/// The dylib projection for one Mach-O (SPEC §9.4 Apple-deep):
+/// load commands, linked dylibs, rpaths, segments, exports and
+/// imports where the binary carries the data for them. Returns
+/// the facts plus the export-trie error, when one occurred.
+fn mach_projection(binary: &goblin::mach::MachO) -> (Value, Option<String>) {
+    let load_commands: Vec<Value> = binary
+        .load_commands
+        .iter()
+        .map(|command| {
+            json!({
+                "cmd": goblin::mach::load_command::cmd_to_str(command.command.cmd()),
+                "cmdsize": command.command.cmdsize(),
+                "offset": command.offset,
+            })
+        })
+        .collect();
+    let segments: Vec<Value> = binary
+        .segments
+        .iter()
+        .map(|segment| {
+            json!({
+                "file_offset": segment.fileoff,
+                "file_size": segment.filesize,
+                "name": segment_name(&segment.segname),
+                "section_count": segment.nsects,
+                "vm_address": format!("{:#x}", segment.vmaddr),
+                "vm_size": segment.vmsize,
+            })
+        })
+        .collect();
+    let (exports, export_error) = match binary.exports() {
+        Ok(exports) => (
+            json!({
+                "count": exports.len(),
+                "sample": exports
+                    .iter()
+                    .take(MACH_NAMES_LISTED_MAX)
+                    .map(|export| export.name.clone())
+                    .collect::<Vec<_>>(),
+            }),
+            None,
+        ),
+        Err(error) => (Value::Null, Some(error.to_string())),
+    };
+    let imports = match binary.imports() {
+        Ok(imports) => json!({
+            "count": imports.len(),
+            "sample": imports
+                .iter()
+                .take(MACH_NAMES_LISTED_MAX)
+                .map(|import| json!({"dylib": import.dylib, "name": import.name}))
+                .collect::<Vec<_>>(),
+        }),
+        Err(_) => Value::Null,
+    };
+    let uuid = binary.load_commands.iter().find_map(|command| {
+        if let goblin::mach::load_command::CommandVariant::Uuid(uuid_command) = &command.command {
+            Some(mach_uuid_string(&uuid_command.uuid))
+        } else {
+            None
+        }
+    });
+    (
+        json!({
+            "entry": format!("{:#x}", binary.entry),
+            "exports": exports,
+            "imports": imports,
+            "install_name": binary.name,
+            "libraries": binary.libs,
+            "load_commands": load_commands,
+            "rpaths": binary.rpaths,
+            "segments": segments,
+            "symbol_count": binary
+                .symbols
+                .as_ref()
+                .map(|symbols| symbols.iter().count()),
+            "uuid": uuid,
+        }),
+        export_error,
+    )
+}
+
+fn mach_cpu_name(cputype: u32) -> String {
+    match cputype {
+        7 => "x86".to_string(),
+        0x0100_0007 => "x86-64".to_string(),
+        12 => "arm".to_string(),
+        0x0100_000c => "arm64".to_string(),
+        0x0200_000c => "arm64_32".to_string(),
+        18 => "ppc".to_string(),
+        0x0100_0012 => "ppc64".to_string(),
+        other => format!("cputype-{other}"),
+    }
+}
+
+fn mach_file_type_name(filetype: u32) -> String {
+    match filetype {
+        1 => "object".to_string(),
+        2 => "execute".to_string(),
+        3 => "fvmlib".to_string(),
+        4 => "core".to_string(),
+        5 => "preload".to_string(),
+        6 => "dylib".to_string(),
+        7 => "dylinker".to_string(),
+        8 => "bundle".to_string(),
+        9 => "dylib_stub".to_string(),
+        10 => "dsym".to_string(),
+        11 => "kext".to_string(),
+        other => format!("filetype-{other}"),
+    }
+}
+
+fn mach_uuid_string(uuid: &[u8; 16]) -> String {
+    let hex: Vec<String> = uuid.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        hex[0..4].concat(),
+        hex[4..6].concat(),
+        hex[6..8].concat(),
+        hex[8..10].concat(),
+        hex[10..16].concat()
+    )
+}
+
+fn segment_name(segname: &[u8; 16]) -> String {
+    let end = segname
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(segname.len());
+    String::from_utf8_lossy(&segname[..end]).into_owned()
 }
 
 fn pe_layout(evidence: &mut Evidence, pe: &goblin::pe::PE) {
@@ -353,5 +540,109 @@ mod tests {
         assert_eq!(elf.header.e_machine, 62);
         assert_eq!(elf.program_headers.len(), 1);
         assert_eq!(elf.program_headers[0].p_type, PT_GNU_STACK);
+    }
+    /// A minimal Mach-O 64 dylib: header + LC_ID_DYLIB +
+    /// LC_SEGMENT_64 + LC_UUID.
+    fn minimal_macho() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&0xfeed_facf_u32.to_le_bytes());
+        bytes.extend_from_slice(&0x0100_0007_u32.to_le_bytes()); // x86-64
+        bytes.extend_from_slice(&3_u32.to_le_bytes()); // cpusubtype
+        bytes.extend_from_slice(&6_u32.to_le_bytes()); // MH_DYLIB
+        bytes.extend_from_slice(&3_u32.to_le_bytes()); // ncmds
+        bytes.extend_from_slice(&144_u32.to_le_bytes()); // sizeofcmds
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // flags
+        bytes.extend_from_slice(&0_u32.to_le_bytes()); // reserved
+        // LC_ID_DYLIB, cmdsize 48, name at offset 24.
+        bytes.extend_from_slice(&0x0d_u32.to_le_bytes());
+        bytes.extend_from_slice(&48_u32.to_le_bytes());
+        bytes.extend_from_slice(&24_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        let name = b"/usr/lib/libdemo.dylib\0";
+        bytes.extend_from_slice(name);
+        bytes.resize(32 + 48, 0); // pad the command to its cmdsize
+        // LC_SEGMENT_64, cmdsize 72.
+        bytes.extend_from_slice(&0x19_u32.to_le_bytes());
+        bytes.extend_from_slice(&72_u32.to_le_bytes());
+        let mut segname = [0_u8; 16];
+        segname[..6].copy_from_slice(b"__TEXT");
+        bytes.extend_from_slice(&segname);
+        bytes.extend([0_u8; 72 - 8 - 16]);
+        // LC_UUID, cmdsize 24.
+        bytes.extend_from_slice(&0x1b_u32.to_le_bytes());
+        bytes.extend_from_slice(&24_u32.to_le_bytes());
+        bytes.extend(0_u8..16);
+        bytes
+    }
+
+    #[test]
+    fn validation_macho_projection_names_install_and_uuid() {
+        let bytes = minimal_macho();
+        let object = goblin::Object::parse(&bytes).unwrap();
+        let goblin::Object::Mach(goblin::mach::Mach::Binary(binary)) = &object else {
+            panic!("expected a Mach-O binary");
+        };
+        let (projection, export_error) = mach_projection(binary);
+        assert!(export_error.is_none());
+        assert_eq!(projection["install_name"], "/usr/lib/libdemo.dylib");
+        assert_eq!(projection["uuid"], "00010203-0405-0607-0809-0a0b0c0d0e0f");
+        assert_eq!(projection["load_commands"].as_array().unwrap().len(), 3);
+        assert_eq!(projection["segments"][0]["name"], "__TEXT",);
+        assert_eq!(mach_cpu_name(binary.header.cputype), "x86-64");
+        assert_eq!(mach_file_type_name(binary.header.filetype), "dylib");
+    }
+
+    #[test]
+    fn validation_macho_fat_projection_covers_each_arch() {
+        let binary = minimal_macho();
+        let mut fat = Vec::new();
+        fat.extend_from_slice(&[0xca, 0xfe, 0xba, 0xbe]);
+        fat.extend_from_slice(&1_u32.to_be_bytes());
+        fat.extend_from_slice(&0x0100_0007_u32.to_be_bytes());
+        fat.extend_from_slice(&3_u32.to_be_bytes());
+        fat.extend_from_slice(&4096_u32.to_be_bytes());
+        fat.extend_from_slice(&(binary.len() as u32).to_be_bytes());
+        fat.extend_from_slice(&12_u32.to_be_bytes());
+        fat.resize(4096, 0);
+        fat.extend_from_slice(&binary);
+        let object = goblin::Object::parse(&fat).unwrap();
+        let goblin::Object::Mach(mach) = &object else {
+            panic!("expected a fat Mach-O");
+        };
+        let mut evidence = Evidence::new("inspect_binary_layout", "native-layout");
+        mach_layout(&mut evidence, mach, &fat);
+        let projection = evidence
+            .findings
+            .iter()
+            .find(|finding| finding.kind == "mach_dylib_projection")
+            .expect("projection finding");
+        assert_eq!(
+            projection.facts["architectures"][0]["install_name"],
+            "/usr/lib/libdemo.dylib"
+        );
+        assert!(evidence.coverage.exhaustive);
+    }
+
+    #[test]
+    fn adversarial_truncated_macho_is_a_parse_failure_not_a_panic() {
+        let bytes = minimal_macho();
+        let truncated = &bytes[..40];
+        let parsed = goblin::Object::parse(truncated);
+        assert!(matches!(parsed, Err(_) | Ok(goblin::Object::Unknown(_))));
+    }
+
+    #[test]
+    fn adversarial_macho_without_trie_has_empty_exports_not_an_error() {
+        let bytes = minimal_macho();
+        let object = goblin::Object::parse(&bytes).unwrap();
+        let goblin::Object::Mach(goblin::mach::Mach::Binary(binary)) = &object else {
+            panic!("expected a Mach-O binary");
+        };
+        let (projection, export_error) = mach_projection(binary);
+        assert!(export_error.is_none());
+        assert_eq!(projection["exports"]["count"], 0);
+        assert_eq!(projection["imports"]["count"], 0);
     }
 }
