@@ -12,7 +12,10 @@ Drives Ghidra 12 headless: one batch export per subject, parsed
 into evidence. Functions, names, strings, inventory search, and
 per-function analysis; binary layout (sections, symbols,
 relocations, mitigation candidates) is read directly with goblin,
-no engine required. Project state is cached per subject SHA-256.
+no engine required. Mach-O binaries additionally get a dylib
+projection: load commands, linked libraries, rpaths, install
+name, and exports/imports where present, per architecture for
+fat binaries. Project state is cached per subject SHA-256.
 
 </details>
 
@@ -23,7 +26,10 @@ oxc parses each module; parse errors are findings, not run
 failures. The module graph resolves relative specifiers; Electron
 boundaries (IPC channels, `contextBridge` exposures, window
 preferences) are extracted from the AST. ASAR archives are read by
-a hand-implemented reader for the pickle-framed format.
+a hand-implemented reader for the pickle-framed format. Source
+maps are parsed (sources, `sourcesContent` presence, segments),
+and `inspect_source_map` maps generated positions back to
+original positions.
 
 </details>
 
@@ -42,8 +48,14 @@ behind the inventory.
 
 Process capture runs commands under the bounded runner (pipes
 only; PTY is staged). Web captures read HAR 1.2 exports. EVM
-bytecode analysis scans for dispatcher selectors. Browser,
-firmware, Android, and Apple deep analysis follow the same
-evidence contract as their stages land.
+bytecode analysis scans for dispatcher selectors. Browser
+observation runs Chromium headless and inventories the
+serialized DOM (title, meta, scripts, links, forms); network
+logs and screenshots are declared unknowns. Firmware inspection
+detects headers and formats, scans for embedded-filesystem
+signatures, and profiles entropy — no extraction. Android APK
+inspection reads the ZIP directory and parses the binary
+manifest (permissions, components, intent filters); DEX and
+resource-table contents are inventoried by name only.
 
 </details>

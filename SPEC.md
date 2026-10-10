@@ -104,18 +104,19 @@ Tools (alphabetical; status = this run):
 | `capture_process` | execute | process | built (pipes; PTY scaffolded) |
 | `compare_artifacts` | read | core | built |
 | `export_evidence_bundle` | read | core | built |
-| `inspect_android_apk` | read | android | scaffold (NOT-IMPLEMENTED) |
+| `inspect_android_apk` | read | android | built (ZIP64 + DEX/arsc decode are named walls) |
 | `inspect_artifact` | read | artifact | built |
 | `inspect_asar` | read | js | built |
 | `inspect_binary_layout` | read | native-layout | built |
 | `inspect_evm_bytecode` | read | evm | built (interface inference scaffolded) |
-| `inspect_firmware` | read | firmware | scaffold (NOT-IMPLEMENTED) |
+| `inspect_firmware` | read | firmware | built (signature scan; no extraction) |
 | `inspect_managed_assembly` | read | managed | built (CIL decode scaffolded) |
+| `inspect_source_map` | read | js | built |
 | `inspect_web_capture` | read | web | built |
 | `list_functions` | read | ghidra | built |
 | `list_names` | read | ghidra | built |
 | `list_strings` | read | ghidra | built |
-| `observe_browser` | observe | browser | scaffold (NOT-IMPLEMENTED) |
+| `observe_browser` | observe | browser | built (Chromium headless DOM inventory) |
 | `search_inventory` | read | ghidra | built |
 | `session_info` | read | core | built |
 | `verify_evidence_bundle` | read | core | built |
@@ -143,7 +144,7 @@ pinned in `Cargo.lock` and built offline thereafter.
 | JS parsing | oxc_parser/oxc_ast/oxc_ast_visit 0.153.0; swc (heavy); boa parser (engine-grade, wrong layer) | **Adopt oxc.** A real Rust JS toolchain (parser + AST + visitor) at production scale; replaces upstream's Babel dependency one-for-one in role. |
 | Binary formats (layout) | goblin 0.10.7; object 0.40.0; pelite 0.10.0 | **Adopt goblin.** ELF/Mach-O/PE parsing in one crate; object is the better *writer's* library and we only read; pelite is PE-only and cannot serve ELF/Mach-O paths. |
 | Deep native analysis | Ghidra 12.1.2 headless (host); Hopper (no Linux automation story); IDA (licensed, GUI-bound) | **Drive Ghidra headless** (§9.1). Reimplementing a decompiler is not a port; upstream itself is a provider shell over engines. |
-| Browser observation | chromiumoxide 0.9.1; raw CDP over websocket by hand | chromiumoxide is viable and maintained; the scenario/session engine around it is a program of its own → **scaffold in this run**, adopt chromiumoxide when the stage is built. |
+| Browser observation | chromiumoxide 0.9.1; raw CDP over websocket by hand | chromiumoxide is viable and maintained; the scenario/session engine around it is a program of its own → **scaffold in this run**, adopt chromiumoxide when the stage is built. Stage 5 built the provider on the Chromium headless CLI (`--dump-dom` under the bounded process runner) rather than chromiumoxide; the session/scenario surface remains unbuilt. |
 | MCP transport | rmcp 3.5.1 (official Rust SDK); hand-rolled JSON-RPC | **Hand-roll.** The wire surface fathom needs (initialize, tools/list, tools/call, ping over stdio + one HTTP POST route) is small; hand-rolling keeps the transport auditable and immune to SDK churn. Trade-off named: protocol upgrades are our work. |
 | A2A card | a2a 0.1.0 (985 downloads, placeholder); hand-rolled per estate pattern | **Hand-roll**, following the volta/vongola pattern: JCS-canonicalized card, Ed25519 signature. |
 | JCS canonicalization | serde_jcs 0.2.0; hand-rolled RFC 8785 | **Hand-roll** with the RFC 8785 test vectors as unit tests; one less dependency for ~100 lines with a public test suite. |
@@ -314,8 +315,11 @@ boundaries are AST-derived: `electron` imports, `ipcMain.handle`/
 exposures, `BrowserWindow` construction, `nodeIntegration`/
 `contextIsolation` webPreferences facts (a security-relevant
 observation set for this operator). Source maps are inventoried
-(presence + sources count); full source-map position mapping is
-scaffolded. Runtime observation (V8 inspector, Electron live
+(presence + sources count) and parsed: `inspect_source_map`
+decodes source-map v3 documents (sources, `sourcesContent`
+presence, name and segment counts) and maps generated positions
+to original positions with greatest-lower-bound segment
+semantics. Runtime observation (V8 inspector, Electron live
 observation) is NOT-IMPLEMENTED in v1.
 
 ### 9.3 Managed (.NET, manual ECMA-335)
@@ -347,18 +351,34 @@ decoded-CIL fingerprint is the stage that follows).
   dispatcher scan for `PUSH4` selector candidates with byte
   offsets, findings `inferred`; argument/mutability inference is
   scaffolded.
-- `observe_browser` (observe): SCAFFOLD. Contract per upstream's
-  browser-observation doc: CDP-driven page structure, script
-  inventory, network observation, screenshots on request, strict
-  data minimization, request-boundary enforcement. Engine:
-  chromiumoxide when built.
-- `inspect_firmware` / `inspect_android_apk` (read): SCAFFOLDS.
-  Both are caller-supplied-engine designs upstream (Binwalk/Unblob;
-  headless JADX + JDK); the contracts, resource bounds, and
-  handoff shapes are specified here, the adapters are not built
-  in this run. Apple bundle anatomy rides on `inspect_artifact`
-  (file inventory, digests, plist parsing) in v1; the dylib
-  load-resolution projection is scaffolded.
+- `observe_browser` (observe): built. Chromium headless
+  (`--headless=new --dump-dom`) runs under the bounded process
+  runner (20 s, 2 MiB DOM cap, per-run profile); the serialized
+  DOM is inventoried — title, meta, scripts, link elements,
+  anchors, forms — with strict data minimization (http/https
+  only, userinfo rejected, fragments stripped). Network logs,
+  final HTTP status, and screenshots are declared unknowns:
+  the dump-dom surface does not expose them.
+- `inspect_firmware` (read): built without an external engine:
+  header/format detection (incl. uImage header fields), a
+  magic-byte signature scan for embedded filesystems/archives,
+  and a Shannon entropy profile over a bounded 64 MiB prefix.
+  No extraction is performed.
+- `inspect_android_apk` (read): built without a JADX/JDK
+  engine: a bounded ZIP reader (stored + deflate) and a binary
+  AXML parser for the manifest — package/version, uses-sdk,
+  permissions, features, application, and components with
+  intent filters. Named walls: ZIP64 and multi-disk archives
+  are unsupported; DEX and `resources.arsc` contents are
+  inventoried by name only; signature verification is not
+  performed.
+- Apple: bundle anatomy rides on `inspect_artifact` (file
+  inventory, digests, plist parsing); the dylib load-resolution
+  projection is built in `inspect_binary_layout` — named load
+  commands, linked dylibs, rpaths, install name, segments,
+  UUID, and exports/imports where present, per architecture
+  for fat binaries. The projection does not resolve the load
+  graph against any filesystem.
 
 ## 10. Surfaces
 
@@ -402,6 +422,11 @@ decoded-CIL fingerprint is the stage that follows).
 - **Stage 4** — full gates: workspace tests, clippy `-D warnings`,
   fmt, IDE gate (headless nvim, live diver config), `nix build`,
   `nix flake check`, mdBook build.
+- **Stage 5** — the stage-2 providers built: browser observation,
+  firmware inspection, Android APK inventory, the Mach-O dylib
+  projection (Apple-deep), and source-map position mapping.
+  IDA/Hopper remain scaffolded: their host tools are absent,
+  which stays a stated unknown.
 
 Anything marked scaffold/NOT-IMPLEMENTED returns
 `capability_unavailable` in-band. Faking coverage is the one
