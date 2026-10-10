@@ -1,0 +1,13 @@
+[package]
+name = "fathom-managed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fathom .NET provider: manual ECMA-335 metadata parsing over goblin PE"
+
+[dependencies]
+goblin = "0.10"
+fathom-core = { path = "../fathom-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

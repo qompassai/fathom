@@ -1,5 +1,5 @@
 # #################################################################
-# /qompassai/rea-rust/shell.nix
+# /qompassai/fathom/shell.nix
 # Qompass AI Flake-Compat Shell Shim
 # SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
 # Copyright (c) 2026 Qompass AI

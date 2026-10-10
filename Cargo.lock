@@ -411,6 +411,97 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
+name = "fathom-a2a"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64",
+ "ed25519-dalek",
+ "fathom-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fathom-cli"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "clap",
+ "fathom-a2a",
+ "fathom-core",
+ "fathom-js",
+ "fathom-managed",
+ "fathom-mcp",
+ "fathom-native",
+ "fathom-observe",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "fathom-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "toml",
+]
+
+[[package]]
+name = "fathom-js"
+version = "0.1.0"
+dependencies = [
+ "fathom-core",
+ "oxc_allocator",
+ "oxc_ast",
+ "oxc_ast_visit",
+ "oxc_parser",
+ "oxc_span",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fathom-managed"
+version = "0.1.0"
+dependencies = [
+ "fathom-core",
+ "goblin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fathom-mcp"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "fathom-core",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "fathom-native"
+version = "0.1.0"
+dependencies = [
+ "fathom-core",
+ "goblin",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "fathom-observe"
+version = "0.1.0"
+dependencies = [
+ "fathom-core",
+ "serde_json",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1089,97 +1180,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "rea-a2a"
-version = "0.1.0"
-dependencies = [
- "axum",
- "base64",
- "ed25519-dalek",
- "rea-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rea-cli"
-version = "0.1.0"
-dependencies = [
- "axum",
- "clap",
- "rea-a2a",
- "rea-core",
- "rea-js",
- "rea-managed",
- "rea-mcp",
- "rea-native",
- "rea-observe",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "rea-core"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "toml",
-]
-
-[[package]]
-name = "rea-js"
-version = "0.1.0"
-dependencies = [
- "oxc_allocator",
- "oxc_ast",
- "oxc_ast_visit",
- "oxc_parser",
- "oxc_span",
- "rea-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rea-managed"
-version = "0.1.0"
-dependencies = [
- "goblin",
- "rea-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rea-mcp"
-version = "0.1.0"
-dependencies = [
- "axum",
- "rea-core",
- "serde_json",
- "tokio",
-]
-
-[[package]]
-name = "rea-native"
-version = "0.1.0"
-dependencies = [
- "goblin",
- "rea-core",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rea-observe"
-version = "0.1.0"
-dependencies = [
- "rea-core",
- "serde_json",
 ]
 
 [[package]]

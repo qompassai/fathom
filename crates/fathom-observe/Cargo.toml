@@ -1,0 +1,11 @@
+[package]
+name = "fathom-observe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fathom observe set: process capture, HAR reading, EVM selectors, and scaffolded runtime providers"
+
+[dependencies]
+fathom-core = { path = "../fathom-core" }
+serde_json.workspace = true

@@ -1,6 +1,6 @@
 # #################################################################
-# /qompassai/rea-rust/Cargo.toml
-# Qompass AI rea-rust — Workspace
+# /qompassai/fathom/Cargo.toml
+# Qompass AI fathom — Workspace
 # SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
@@ -11,14 +11,14 @@
 
 [workspace]
 members = [
-    "crates/rea-a2a",
-    "crates/rea-cli",
-    "crates/rea-core",
-    "crates/rea-js",
-    "crates/rea-managed",
-    "crates/rea-mcp",
-    "crates/rea-native",
-    "crates/rea-observe",
+    "crates/fathom-a2a",
+    "crates/fathom-cli",
+    "crates/fathom-core",
+    "crates/fathom-js",
+    "crates/fathom-managed",
+    "crates/fathom-mcp",
+    "crates/fathom-native",
+    "crates/fathom-observe",
 ]
 resolver = "2"
 

@@ -1,0 +1,13 @@
+[package]
+name = "fathom-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fathom native-binary provider: Ghidra headless analysis, artifact and layout inspection"
+
+[dependencies]
+goblin = "0.10"
+fathom-core = { path = "../fathom-core" }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

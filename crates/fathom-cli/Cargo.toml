@@ -1,0 +1,24 @@
+[package]
+name = "fathom-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fathom binary: serve (MCP stdio/HTTP), card, doctor, one-shot tool calls"
+
+[[bin]]
+name = "fathom"
+path = "src/main.rs"
+
+[dependencies]
+axum.workspace = true
+clap.workspace = true
+fathom-a2a = { path = "../fathom-a2a" }
+fathom-core = { path = "../fathom-core" }
+fathom-js = { path = "../fathom-js" }
+fathom-managed = { path = "../fathom-managed" }
+fathom-mcp = { path = "../fathom-mcp" }
+fathom-native = { path = "../fathom-native" }
+fathom-observe = { path = "../fathom-observe" }
+serde_json.workspace = true
+tokio.workspace = true

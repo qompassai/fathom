@@ -1,13 +1,13 @@
 # #################################################################
-# /qompassai/rea-rust/flake.nix
-# Qompass AI rea-rust — Flake
+# /qompassai/fathom/flake.nix
+# Qompass AI fathom — Flake
 # SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
 # Original work of Qompass AI (clean-room port, 2026-10-10).
 # #################################################################
 {
-  description = "rea-rust — clean-room Rust port of REA: evidence-first reverse-engineering MCP/A2A server";
+  description = "fathom — clean-room Rust port of REA: evidence-first reverse-engineering MCP/A2A server";
 
   inputs = {
     fenix = {
@@ -56,13 +56,13 @@
         rustc = toolchain;
       };
     in {
-      default = self.packages.${system}.rea-rust;
-      rea-rust = rustPlatform.buildRustPackage {
-        pname = "rea-rust";
+      default = self.packages.${system}.fathom;
+      fathom = rustPlatform.buildRustPackage {
+        pname = "fathom";
         version = "0.1.0";
         src = ./.;
         cargoLock.lockFile = ./Cargo.lock;
-        cargoBuildFlags = ["--package" "rea-cli"];
+        cargoBuildFlags = ["--package" "fathom-cli"];
         doCheck = false;
         meta.license = with pkgs.lib.licenses; [agpl3Only asl20];
       };
