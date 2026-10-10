@@ -3,19 +3,26 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
-RECONCILED WITH THE ESTATE PATTERN, NOT ORIGINATED: the established
-OpenShell pattern in this estate is machine-level — the NVIDIA
-OpenShell gateway configuration in the operator's home
-(`~/.config/openshell/gateway.toml`, schema version 2, podman
-compute driver, primary listener on loopback `127.0.0.1:17670`,
-mutual TLS by default), documented by
-`agents/openshell/CONFIGURATION.md` in the Daelin configuration
-tree (`~/.GH/Qompass/Daelin/agents/openshell/`). Project repos do
-not carry their own gateway state.
+This directory follows the estate OpenShell pattern; it is not
+an originated design. The pattern's source of truth is
+machine-level: the OpenShell gateway configuration reference
+kept with the diver configuration at
+`agents/openshell/CONFIGURATION.md`, and the operator's active
+gateway config at `~/.config/openshell/gateway.toml` (schema
+version 2, podman driver pinned, mTLS on by default).
 
-This directory is the minimal repo-level equivalent, following the
-shape volta and vongola established: `gateway.toml.example`
-mirrors the machine gateway's shape with rea-rust-specific
-naming, so a rea-rust development sandbox can run behind the same
-gateway conventions. It contains no secrets; real gateway state
-stays in the operator's home configuration.
+`gateway.toml.example` is that gateway shape carrying rea-rust's
+values, so a rea-rust development sandbox runs behind the same
+gateway conventions as the rest of the estate. It contains no
+secrets; real gateway state stays in the operator's home
+configuration, and TLS material is auto-generated under
+`~/.local/state/openshell/tls/`.
+
+History: this directory was originated independently during the
+2026-10-10 Rust port scaffold, before the estate pattern was
+located in full, and was reconciled to the pattern the same day
+after a cross-repo audit. The originated sketch used invented
+`[gateway]` and `[sandbox]` sections with `address`/`driver`/`mtls`
+fields; the schema's real shape is `[openshell]` with `version = 2`,
+`[openshell.gateway]` (`bind_address`, `compute_driver`, mTLS
+by default), and `[openshell.drivers.podman]`.

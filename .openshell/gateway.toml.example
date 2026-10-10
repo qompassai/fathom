@@ -2,15 +2,51 @@
 # Copyright (c) 2026 Qompass AI
 #
 # Example OpenShell gateway profile for rea-rust development.
-# Mirrors the machine-level gateway shape (~/.config/openshell/
-# gateway.toml, version 2); see README.md in this directory for why
-# this file is a reconciled equivalent, not a copied pattern.
+#
+# This file follows the estate OpenShell pattern: the gateway
+# configuration reference kept with the diver configuration
+# (agents/openshell/CONFIGURATION.md) and the operator's active
+# gateway config (~/.config/openshell/gateway.toml, schema
+# version 2). Copy it to ~/.config/openshell/gateway.toml on a
+# rea-rust development host (or point OPENSHELL_GATEWAY_CONFIG
+# at it) and adjust values there; the copy in this repo is an
+# example, never the active file. It contains no secrets: TLS
+# material is auto-generated under ~/.local/state/openshell/tls/
+# on first gateway start, and the database URL is not accepted
+# in TOML (set OPENSHELL_DB_URL in gateway.env instead).
 
-[gateway]
-address = "127.0.0.1:17670"
-driver = "podman"
-mtls = true
+[openshell]
 version = 2
 
-[sandbox]
-name = "rea-rust-dev"
+[openshell.drivers.podman]
+default_image = "nvcr.io/nvidia/base/ubuntu:24.04"
+health_check_interval_secs = 10
+image_pull_policy = "if_not_present"
+network_name = "openshell"
+sandbox_runtime_image = "ghcr.io/nvidia/openshell/sandbox:latest"
+stop_timeout_secs = 10
+supervisor_image = "ghcr.io/nvidia/openshell/supervisor:latest"
+
+[openshell.gateway]
+bind_address = "127.0.0.1:17670"
+compute_driver = "podman"
+# mTLS is on by default: the gateway requires a valid client
+# certificate for all API connections. The "rea-rust-dev" sandbox
+# name from the originated sketch is a CLI concern at sandbox
+# creation time; the gateway schema carries no per-sandbox name.
+# WARNING: disabling TLS leaves the gateway API with no
+# authentication. Keep bind_address on 127.0.0.1. Unset by
+# default; never set it for rea-rust gateways.
+# disable_tls = true
+# Client TLS material bind-mounted into sandbox containers
+# (auto-generated paths used when unset).
+# guest_tls_ca = "/home/user/.local/state/openshell/tls/ca.crt"
+# guest_tls_cert = "/home/user/.local/state/openshell/tls/client/tls.crt"
+# guest_tls_key = "/home/user/.local/state/openshell/tls/client/tls.key"
+
+# Externally-managed certificates (auto-generated paths used
+# when unset).
+# [openshell.gateway.tls]
+# cert_path = "/path/to/server/tls.crt"
+# client_ca_path = "/path/to/ca.crt"
+# key_path = "/path/to/server/tls.key"
