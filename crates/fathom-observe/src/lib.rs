@@ -2,11 +2,11 @@
 //!
 //! `capture_process` (execute class, default-deny), HAR capture
 //! reading, browser observation, firmware inspection, and EVM
-//! selector extraction are built. The Android provider stays
-//! scaffolded: its engine is caller-supplied and not built in
-//! this stage.
+//! selector extraction, and the Android APK provider are
+//! built.
 #![forbid(unsafe_code)]
 
+mod android;
 mod browser;
 mod capture;
 mod evm;
@@ -43,15 +43,15 @@ pub fn register(registry: &mut Registry) {
         ),
         Arc::new(capture::capture_process),
     );
-    registry.register_not_implemented(
+    registry.register(
         descriptor(
             "inspect_android_apk",
             ToolClass::Read,
             "android",
-            "Static APK analysis via a caller-supplied headless JADX engine",
+            "Static APK inventory: ZIP contents, contents classes, and the binary-XML manifest (package, permissions, components)",
             target_schema(),
         ),
-        "§9.4",
+        Arc::new(android::inspect_android_apk),
     );
     registry.register(
         descriptor(

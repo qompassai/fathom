@@ -8,5 +8,6 @@ description = "fathom observe set: process capture, HAR reading, EVM selectors, 
 
 [dependencies]
 fathom-core = { path = "../fathom-core" }
+flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true
