@@ -1,7 +1,8 @@
 # fathom
 
-<!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
+<a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 
 Rust port of REA (Reverse Engineer Anything): one
 provider-neutral MCP server for reverse engineering — native
@@ -46,5 +47,5 @@ cargo test --workspace
 
 ## License
 
-Dual-licensed AGPL-3.0-only OR Apache-2.0; see `LICENSE`,
-`LICENSE-AGPL`, and `NOTICE`.
+This project is licensed under the [Apache License, Version 2.0](./LICENSE).
+
