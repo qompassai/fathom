@@ -34,3 +34,13 @@ nested third-party MCP server.
 canonicalization are implemented in-repo (estate pattern from
 volta/vongola) rather than depending on `rmcp`, `a2a`, or
 `serde_jcs`.
+
+## Name the port plainly (2026-10-12)
+
+**Decision** (Matt): fathom is described as a Rust port of REA —
+nothing more. A two-word methodological descriptor that earlier
+project text carried was removed from every project-facing
+surface (NOTICE, README, SPEC, book overview, crate docs,
+manifest comments, flake description, current.md) in commit
+`6fec010`. Dated records, including the first entry of this
+file, keep their original wording: history is not rewritten.
