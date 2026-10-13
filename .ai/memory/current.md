@@ -4,17 +4,22 @@ fathom: Rust port of REA (morluto/rea), commissioned
 2026-10-10. Spec-led from upstream's public docs and contracts;
 no TypeScript transliterated.
 
-## Status (2026-10-10)
+## Status (2026-10-12)
 
-- Stage 0 (SPEC.md) committed.
-- Stage 1 (scaffolding + core crates) committed.
-- Stage 2 (native Ghidra/goblin, JS/Electron oxc/ASAR) committed.
-- Stage 3 built: fathom-managed .NET inventory (manual ECMA-335;
-  CIL decode scaffolded) and fathom-observe capture_process
-  (allow_programs-gated), HAR reading, EVM selector scan.
-  Browser, firmware, Android stay scaffolded per SPEC 9.4.
-- Pushed to github.com/qompassai/fathom; renamed in-tree from
-  rea-rust to fathom (crates, binary, docs) on 2026-10-10.
+- Stages 0–4 committed and gated (see SPEC §11).
+- Renamed in-tree from rea-rust to fathom (crates, binary, docs)
+  on 2026-10-10; OpenAPPA worker profile added the same day.
+- Stage 5 built (2026-10-11): browser observation (Chromium
+  headless DOM inventory), firmware inspection, Android APK
+  inventory, Mach-O dylib projection, source-map position
+  mapping. All 22 port tools are built; no tool is registered
+  not-implemented.
+- Named walls remain, exactly as SPEC states them: PTY capture,
+  decoded-CIL instruction listings, EVM interface inference
+  beyond selectors, ZIP64 + DEX/arsc decode in APK inspection,
+  firmware extraction, the browser session/scenario engine,
+  mitmproxy native captures, and the IDA/Hopper providers
+  (host tools absent — a stated unknown, not a gap to fake).
 
 ## Standing rules
 
