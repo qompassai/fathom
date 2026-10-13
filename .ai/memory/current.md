@@ -1,6 +1,6 @@
 # Current Work
 
-fathom: clean-room Rust port of REA (morluto/rea), commissioned
+fathom: Rust port of REA (morluto/rea), commissioned
 2026-10-10. Spec-led from upstream's public docs and contracts;
 no TypeScript transliterated.
 

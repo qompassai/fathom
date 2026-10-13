@@ -4,10 +4,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
-# Original work of Qompass AI (clean-room port, 2026-10-10).
+# Original work of Qompass AI (2026-10-10).
 # #################################################################
 {
-  description = "fathom — clean-room Rust port of REA: evidence-first reverse-engineering MCP/A2A server";
+  description = "fathom — Rust port of REA: evidence-first reverse-engineering MCP/A2A server";
 
   inputs = {
     fenix = {

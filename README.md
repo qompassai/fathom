@@ -3,7 +3,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
-Clean-room Rust port of REA (Reverse Engineer Anything): one
+Rust port of REA (Reverse Engineer Anything): one
 provider-neutral MCP server for reverse engineering — native
 binaries, JavaScript/Electron applications, .NET assemblies, web
 captures, EVM bytecode, and process behavior — where every result

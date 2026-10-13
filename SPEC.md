@@ -3,7 +3,7 @@
 <!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
-Clean-room Rust port of REA (Reverse Engineer Anything). This document
+Rust port of REA (Reverse Engineer Anything). This document
 is the contract the implementation is built and gated against: the
 capability inventory, the per-capability Rust strategy, the evidence
 and error models, the policy and confinement rules, the MCP and A2A

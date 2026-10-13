@@ -1,4 +1,4 @@
-//! fathom: clean-room Rust port of REA (SPEC.md).
+//! fathom: Rust port of REA (SPEC.md).
 //!
 //! Surfaces: `serve` (MCP over stdio, or HTTP with the A2A card
 //! when `--http` is given), `card`, `doctor`, and `tool` for
