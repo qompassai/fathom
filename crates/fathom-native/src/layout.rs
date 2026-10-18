@@ -25,7 +25,11 @@ const DLL_CFG: u16 = 0x4000;
 const DLL_NO_SEH: u16 = 0x0400;
 const DLL_NX: u16 = 0x0100;
 const PF_X: u32 = 1;
-const SYMBOL_NAMES_LISTED_MAX: usize = 256;
+/// Name rows listed at most per ELF symbol table in the layout
+/// finding. 1024 rows keep the finding useful on real binaries
+/// (a Go hello-world carries ~2,500 static symbols) while the
+/// envelope stays far under the output bound.
+const SYMBOL_NAMES_LISTED_MAX: usize = 1024;
 
 pub fn inspect_binary_layout(
     _: &Registry,
@@ -226,27 +230,38 @@ fn elf_layout(evidence: &mut Evidence, elf: &goblin::elf::Elf) {
 }
 
 /// Bounded name rows for one ELF symbol table: (rows, named
-/// count, truncated). Empty names (the null symbol) are skipped;
-/// the row cap keeps a huge table from flooding the envelope,
-/// with truncation reported rather than silent.
+/// count, truncated). Empty names (the null symbol) are skipped.
+/// When the table exceeds the row cap, the rows are a
+/// deterministic stride sample over the name-sorted table —
+/// never a prefix of raw symtab order, which is link order and
+/// would systematically hide whole regions of the table (a Go
+/// binary's `main.*` symbols sit thousands of entries deep).
+/// Truncation is reported rather than silent.
 fn elf_symbol_rows<'a>(
     symbols: impl Iterator<Item = (&'a str, u8, bool)>,
 ) -> (Vec<Value>, usize, bool) {
-    let mut rows: Vec<Value> = Vec::new();
-    let mut named: usize = 0;
-    for (name, st_type, defined) in symbols {
-        if name.is_empty() {
-            continue;
-        }
-        named += 1;
-        if rows.len() < SYMBOL_NAMES_LISTED_MAX {
-            rows.push(json!({
+    let mut named_rows: Vec<(&'a str, u8, bool)> =
+        symbols.filter(|(name, _, _)| !name.is_empty()).collect();
+    let named = named_rows.len();
+    named_rows.sort_by(|a, b| a.0.cmp(b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let picked: Vec<(&'a str, u8, bool)> = if named > SYMBOL_NAMES_LISTED_MAX {
+        let step = named as f64 / SYMBOL_NAMES_LISTED_MAX as f64;
+        (0..SYMBOL_NAMES_LISTED_MAX)
+            .map(|index| named_rows[(index as f64 * step) as usize])
+            .collect()
+    } else {
+        named_rows
+    };
+    let rows: Vec<Value> = picked
+        .iter()
+        .map(|(name, st_type, defined)| {
+            json!({
                 "defined": defined,
                 "name": name,
-                "type": elf_symbol_type_name(st_type),
-            }));
-        }
-    }
+                "type": elf_symbol_type_name(*st_type),
+            })
+        })
+        .collect();
     let truncated = named > rows.len();
     (rows, named, truncated)
 }
@@ -648,6 +663,32 @@ mod tests {
         assert_eq!(named, SYMBOL_NAMES_LISTED_MAX + 5);
         assert_eq!(rows.len(), SYMBOL_NAMES_LISTED_MAX);
         assert!(truncated);
+    }
+
+    #[test]
+    fn adversarial_symbol_rows_sample_the_whole_table() {
+        // Regression (D7): rows were a prefix of raw symtab
+        // order, so on a 2,530-symbol Go binary every corpus
+        // name sat beyond the cap and layout reported none.
+        // The sample must be name-sorted, deterministic, and
+        // reach the tail of the table.
+        let triples: Vec<(String, u8, bool)> = (0..3_000)
+            .map(|i| (format!("sym_{i:04}"), 2, true))
+            .collect();
+        let (rows, named, truncated) =
+            elf_symbol_rows(triples.iter().map(|(n, t, d)| (n.as_str(), *t, *d)));
+        assert_eq!(named, 3_000);
+        assert!(truncated);
+        assert_eq!(rows.len(), SYMBOL_NAMES_LISTED_MAX);
+        let names: Vec<&str> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+        let mut sorted = names.clone();
+        sorted.sort_unstable();
+        assert_eq!(names, sorted);
+        // The stride reaches the final decile of the table; a
+        // prefix sample's last name would be sym_1023.
+        assert!(names[names.len() - 1] >= "sym_2700");
+        let (again, _, _) = elf_symbol_rows(triples.iter().map(|(n, t, d)| (n.as_str(), *t, *d)));
+        assert_eq!(rows, again);
     }
     /// A minimal Mach-O 64 dylib: header + LC_ID_DYLIB +
     /// LC_SEGMENT_64 + LC_UUID.
