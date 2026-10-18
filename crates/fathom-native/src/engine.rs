@@ -149,6 +149,9 @@ pub fn run_export(
         timeout: std::time::Duration::from_secs(GHIDRA_TIMEOUT_SECS),
     })?;
     let produced = export_dir.join("export.json");
+    if outcome.timed_out {
+        return finish_timed_out_run(&cache_dir, &export_file, &produced, subject);
+    }
     if !produced.exists() {
         let stdout_text = String::from_utf8_lossy(&outcome.stdout);
         let stderr_text = String::from_utf8_lossy(&outcome.stderr);
@@ -190,6 +193,40 @@ pub fn run_export(
     }
     fs::write(&export_file, &bytes).ok();
     parse_export(&bytes)
+}
+
+/// Settle a run the provider bound killed (SPEC §7: the failure is
+/// a `provider_timeout`, not an execution failure). If the export
+/// script nevertheless completed and its document parses, the
+/// evidence is real and is kept. Otherwise the per-subject cache —
+/// including any half-imported project — is discarded, so a later
+/// call retries a clean import instead of silently reusing a
+/// partial program under `-process -noanalysis`.
+fn finish_timed_out_run(
+    cache_dir: &Path,
+    export_file: &Path,
+    produced: &Path,
+    subject: &Path,
+) -> Result<Export, FathomError> {
+    if let Ok(bytes) = fs::read(produced)
+        && let Ok(export) = parse_export(&bytes)
+    {
+        fs::write(export_file, &bytes).ok();
+        return Ok(export);
+    }
+    // Best-effort cleanup: a removal failure leaves a stale cache
+    // dir that the next import attempt reports as its own error;
+    // the timeout is the failure being returned either way.
+    fs::remove_dir_all(cache_dir).ok();
+    Err(FathomError::new(
+        ErrorCode::ProviderTimeout,
+        format!(
+            "Ghidra analysis exceeded the {GHIDRA_TIMEOUT_SECS}s provider bound; \
+             the partial project was discarded, so a retry starts from a clean import"
+        ),
+    )
+    .with_target(subject.display().to_string())
+    .with_remediation("Retry the call; a completed first import is cached for later calls."))
 }
 
 fn read_export(path: &Path) -> Result<Export, FathomError> {
@@ -359,5 +396,63 @@ mod tests {
         assert_eq!(export.functions[0].classification, "defined");
         assert_eq!(export.symbols[0].kind, "Function");
         assert_eq!(export.memory_blocks[0].size, 4096);
+    }
+
+    /// A scratch per-test directory tree: cache dir, the cached
+    /// export path inside it, and the produced export inside an
+    /// out dir, mirroring the layout `run_export` builds.
+    struct ScratchRun {
+        cache_dir: std::path::PathBuf,
+        export_file: std::path::PathBuf,
+        produced: std::path::PathBuf,
+    }
+
+    fn scratch_run(tag: &str) -> ScratchRun {
+        let root =
+            std::env::temp_dir().join(format!("fathom-engine-test-{tag}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let cache_dir = root.join("cache");
+        let out_dir = cache_dir.join("out-overview");
+        fs::create_dir_all(&out_dir).unwrap();
+        ScratchRun {
+            export_file: cache_dir.join("export-overview.json"),
+            produced: out_dir.join("export.json"),
+            cache_dir,
+        }
+    }
+
+    #[test]
+    fn adversarial_timed_out_run_discards_partial_cache() {
+        // A half-written export from a killed run must not be
+        // trusted, and the poisoned cache must go with it.
+        let run = scratch_run("partial");
+        fs::write(&run.produced, b"{\"program\":").unwrap();
+        let error = finish_timed_out_run(
+            &run.cache_dir,
+            &run.export_file,
+            &run.produced,
+            Path::new("/targets/sample"),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ProviderTimeout);
+        assert!(!run.cache_dir.exists());
+    }
+
+    #[test]
+    fn validation_timed_out_run_keeps_completed_export() {
+        // The script finished inside the deadline's race window:
+        // its document parses, so the evidence is kept and cached.
+        let run = scratch_run("complete");
+        fs::write(&run.produced, SAMPLE).unwrap();
+        let export = finish_timed_out_run(
+            &run.cache_dir,
+            &run.export_file,
+            &run.produced,
+            Path::new("/targets/sample"),
+        )
+        .unwrap();
+        assert_eq!(export.program.name, "true");
+        assert_eq!(fs::read(&run.export_file).unwrap(), SAMPLE);
+        let _ = fs::remove_dir_all(run.cache_dir.parent().unwrap());
     }
 }
