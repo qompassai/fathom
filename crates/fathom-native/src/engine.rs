@@ -411,6 +411,33 @@ mod tests {
     }
 
     #[test]
+    fn validation_export_retains_beyond_the_listing_bound() {
+        // Regression (D8): search_inventory matches over the
+        // retained export, so parsing must keep rows beyond the
+        // 5,000-row listing bound the provider returns — the
+        // corpus Go marker sits past row 5,000 of 15,491.
+        let mut rows = String::new();
+        for index in 0..6_000 {
+            if index > 0 {
+                rows.push(',');
+            }
+            rows.push_str(&format!(
+                "{{\"address\": \"{index:06x}\", \"value\": \"value-{index}\"}}"
+            ));
+        }
+        let doc = format!(
+            "{{\"data_strings\": [{rows}], \"data_strings_total\": 6000, \
+             \"data_strings_truncated\": false, \"data_strings_scan_capped\": false, \
+             \"program\": {{\"address_size\": \"64\", \"compiler_spec\": \"gcc\", \
+             \"executable_format\": \"ELF\", \"image_base\": \"00400000\", \
+             \"language_id\": \"x86:LE:64:default\", \"name\": \"big\"}}}}"
+        );
+        let export = parse_export(doc.as_bytes()).expect("export parses");
+        assert_eq!(export.data_strings.len(), 6_000);
+        assert_eq!(export.data_strings[5_999].value, "value-5999");
+    }
+
+    #[test]
     fn validation_export_parses_data_strings_and_match_metadata() {
         let doc = r#"{
             "data_strings": [{"address": "00402000", "value": "FATHOM-CORPUS-MARKER"}],

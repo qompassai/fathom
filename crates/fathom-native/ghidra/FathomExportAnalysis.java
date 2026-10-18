@@ -46,17 +46,27 @@ public class FathomExportAnalysis extends GhidraScript {
 
     private static final int DECOMPILE_TIMEOUT_S = 30;
     private static final long DECOMPILE_BYTES_MAX = 1024L * 1024L;
-    private static final int FUNCTION_MAX = 5000;
+    private static final int FUNCTION_MAX = 50000;
     private static final int INSTRUCTION_MAX = 2000;
     private static final int STRING_CHARS_MAX = 200;
-    private static final int STRING_MAX = 5000;
+    // Byte-run values get a larger cap: Go/Rust string blobs are
+    // long concatenated runs, and a 200-char cap silently cut
+    // content (and search hits) deep inside a run.
+    private static final int DATA_STRING_CHARS_MAX = 4096;
+    private static final int STRING_MAX = 50000;
     private static final int SYMBOL_MAX = 20000;
+    // Export harvest bound: the row caps above are generous so
+    // search_inventory can see past the provider's returned-row
+    // limits (fathom-core STRING_COUNT_MAX/FUNCTION_COUNT_MAX);
+    // this per-array byte budget is what actually binds, keeping
+    // the whole export under the engine's OUTPUT_BYTES_MAX.
+    private static final long EXPORT_BYTES_MAX = 1500L * 1024L;
     // Byte-run string harvest (finds literals Ghidra does not define,
     // notably unterminated Rust/Go strings): printable-ASCII runs of
     // at least DATA_STRING_MIN bytes in initialized memory, with an
     // aggregate scan budget so a huge image cannot make the export
     // unbounded.
-    private static final int DATA_STRING_MAX = 5000;
+    private static final int DATA_STRING_MAX = 50000;
     private static final int DATA_STRING_MIN = 4;
     private static final long DATA_SCAN_BYTES_MAX = 64L * 1024L * 1024L;
     private static final int DATA_SCAN_CHUNK_BYTES = 1024 * 1024;
@@ -129,13 +139,17 @@ public class FathomExportAnalysis extends GhidraScript {
 
         int functionTotal = currentProgram.getFunctionManager().getFunctionCount();
         List<String> functionRows = new ArrayList<>();
+        long functionBytes = 0;
         FunctionIterator functions =
             currentProgram.getFunctionManager().getFunctions(true);
-        while (functions.hasNext() && functionRows.size() < FUNCTION_MAX) {
+        while (functions.hasNext() && functionRows.size() < FUNCTION_MAX
+                && functionBytes < EXPORT_BYTES_MAX) {
             if (monitor.isCancelled()) {
                 break;
             }
-            functionRows.add(functionJson(functions.next()));
+            String row = functionJson(functions.next());
+            functionRows.add(row);
+            functionBytes += row.length();
         }
         json.append(",\"functions\":[").append(String.join(",", functionRows)).append(']');
         json.append(",\"functions_total\":").append(functionTotal);
@@ -143,6 +157,7 @@ public class FathomExportAnalysis extends GhidraScript {
 
         int stringTotal = 0;
         List<String> stringRows = new ArrayList<>();
+        long stringBytes = 0;
         DataIterator dataItems = currentProgram.getListing().getDefinedData(true);
         while (dataItems.hasNext()) {
             if (monitor.isCancelled()) {
@@ -152,13 +167,15 @@ public class FathomExportAnalysis extends GhidraScript {
             Object value = data.getValue();
             if (value instanceof String) {
                 stringTotal++;
-                if (stringRows.size() < STRING_MAX) {
+                if (stringRows.size() < STRING_MAX && stringBytes < EXPORT_BYTES_MAX) {
                     String text = (String) value;
                     if (text.length() > STRING_CHARS_MAX) {
                         text = text.substring(0, STRING_CHARS_MAX);
                     }
-                    stringRows.add("{\"address\":" + quoted(data.getAddress().toString())
-                        + ",\"value\":" + quoted(text) + '}');
+                    String row = "{\"address\":" + quoted(data.getAddress().toString())
+                        + ",\"value\":" + quoted(text) + '}';
+                    stringRows.add(row);
+                    stringBytes += row.length();
                 }
             }
         }
@@ -198,6 +215,7 @@ public class FathomExportAnalysis extends GhidraScript {
     // silently merged with the defined set.
     private void appendDataStrings(StringBuilder json) {
         List<String> rows = new ArrayList<>();
+        long dataBytes = 0;
         long total = 0;
         long scanned = 0;
         boolean capped = false;
@@ -237,16 +255,18 @@ public class FathomExportAnalysis extends GhidraScript {
                             runStart = i;
                             runText.setLength(0);
                         }
-                        if (runText.length() < STRING_CHARS_MAX) {
+                        if (runText.length() < DATA_STRING_CHARS_MAX) {
                             runText.append((char) b);
                         }
                     } else {
                         if (runStart >= 0 && i - runStart >= DATA_STRING_MIN) {
                             total++;
-                            if (rows.size() < DATA_STRING_MAX) {
-                                rows.add("{\"address\":"
+                            if (rows.size() < DATA_STRING_MAX && dataBytes < EXPORT_BYTES_MAX) {
+                                String row = "{\"address\":"
                                     + quoted(cursor.add(runStart).toString())
-                                    + ",\"value\":" + quoted(runText.toString()) + '}');
+                                    + ",\"value\":" + quoted(runText.toString()) + '}';
+                                rows.add(row);
+                                dataBytes += row.length();
                             }
                         }
                         runStart = -1;
@@ -254,10 +274,12 @@ public class FathomExportAnalysis extends GhidraScript {
                 }
                 if (runStart >= 0 && got - runStart >= DATA_STRING_MIN) {
                     total++;
-                    if (rows.size() < DATA_STRING_MAX) {
-                        rows.add("{\"address\":"
+                    if (rows.size() < DATA_STRING_MAX && dataBytes < EXPORT_BYTES_MAX) {
+                        String row = "{\"address\":"
                             + quoted(cursor.add(runStart).toString())
-                            + ",\"value\":" + quoted(runText.toString()) + '}');
+                            + ",\"value\":" + quoted(runText.toString()) + '}';
+                        rows.add(row);
+                        dataBytes += row.length();
                     }
                 }
                 cursor = cursor.add(got);
