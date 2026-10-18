@@ -25,6 +25,7 @@ const DLL_CFG: u16 = 0x4000;
 const DLL_NO_SEH: u16 = 0x0400;
 const DLL_NX: u16 = 0x0100;
 const PF_X: u32 = 1;
+const SYMBOL_NAMES_LISTED_MAX: usize = 256;
 
 pub fn inspect_binary_layout(
     _: &Registry,
@@ -146,6 +147,45 @@ fn elf_layout(evidence: &mut Evidence, elf: &goblin::elf::Elf) {
         }),
     ));
 
+    // SPEC §9.1 names symbols, not just counts: report bounded
+    // name rows for both ELF symbol tables, mirroring the Mach-O
+    // exports/imports sample pattern. Without this the layout of
+    // an unstripped binary identifies no function at all.
+    let (dynamic_rows, dynamic_named, dynamic_truncated) =
+        elf_symbol_rows(elf.dynsyms.iter().map(|sym| {
+            (
+                elf.dynstrtab.get_at(sym.st_name).unwrap_or(""),
+                sym.st_type(),
+                sym.st_shndx != 0,
+            )
+        }));
+    let (symbol_rows, symbol_named, symbol_truncated) =
+        elf_symbol_rows(elf.syms.iter().map(|sym| {
+            (
+                elf.strtab.get_at(sym.st_name).unwrap_or(""),
+                sym.st_type(),
+                sym.st_shndx != 0,
+            )
+        }));
+    evidence.add_finding(Finding::new(
+        "symbols",
+        Confidence::Observed,
+        json!({
+            "dynamic": {
+                "count": elf.dynsyms.len(),
+                "named": dynamic_named,
+                "rows": dynamic_rows,
+                "truncated": dynamic_truncated,
+            },
+            "static": {
+                "count": elf.syms.len(),
+                "named": symbol_named,
+                "rows": symbol_rows,
+                "truncated": symbol_truncated,
+            },
+        }),
+    ));
+
     let gnu_stack = elf
         .program_headers
         .iter()
@@ -183,6 +223,45 @@ fn elf_layout(evidence: &mut Evidence, elf: &goblin::elf::Elf) {
         }),
     ));
     evidence.coverage.exhaustive = true;
+}
+
+/// Bounded name rows for one ELF symbol table: (rows, named
+/// count, truncated). Empty names (the null symbol) are skipped;
+/// the row cap keeps a huge table from flooding the envelope,
+/// with truncation reported rather than silent.
+fn elf_symbol_rows<'a>(
+    symbols: impl Iterator<Item = (&'a str, u8, bool)>,
+) -> (Vec<Value>, usize, bool) {
+    let mut rows: Vec<Value> = Vec::new();
+    let mut named: usize = 0;
+    for (name, st_type, defined) in symbols {
+        if name.is_empty() {
+            continue;
+        }
+        named += 1;
+        if rows.len() < SYMBOL_NAMES_LISTED_MAX {
+            rows.push(json!({
+                "defined": defined,
+                "name": name,
+                "type": elf_symbol_type_name(st_type),
+            }));
+        }
+    }
+    let truncated = named > rows.len();
+    (rows, named, truncated)
+}
+
+fn elf_symbol_type_name(st_type: u8) -> &'static str {
+    match st_type {
+        0 => "notype",
+        1 => "object",
+        2 => "function",
+        3 => "section",
+        4 => "file",
+        5 => "common",
+        6 => "tls",
+        _ => "other",
+    }
 }
 
 /// Names listed in the exports/imports samples of one Mach-O
@@ -540,6 +619,35 @@ mod tests {
         assert_eq!(elf.header.e_machine, 62);
         assert_eq!(elf.program_headers.len(), 1);
         assert_eq!(elf.program_headers[0].p_type, PT_GNU_STACK);
+    }
+
+    #[test]
+    fn validation_symbol_rows_carry_names_and_types() {
+        let triples: Vec<(&str, u8, bool)> = vec![
+            ("corpus_fib", 2, true),
+            ("corpus_marker", 1, true),
+            ("puts", 2, false),
+        ];
+        let (rows, named, truncated) = elf_symbol_rows(triples.into_iter());
+        assert_eq!(named, 3);
+        assert!(!truncated);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0]["name"], "corpus_fib");
+        assert_eq!(rows[0]["type"], "function");
+        assert_eq!(rows[2]["defined"], false);
+    }
+
+    #[test]
+    fn adversarial_symbol_rows_skip_empty_and_cap() {
+        let mut triples: Vec<(String, u8, bool)> = vec![(String::new(), 0, false)];
+        for i in 0..(SYMBOL_NAMES_LISTED_MAX + 5) {
+            triples.push((format!("sym_{i}"), 2, true));
+        }
+        let (rows, named, truncated) =
+            elf_symbol_rows(triples.iter().map(|(n, t, d)| (n.as_str(), *t, *d)));
+        assert_eq!(named, SYMBOL_NAMES_LISTED_MAX + 5);
+        assert_eq!(rows.len(), SYMBOL_NAMES_LISTED_MAX);
+        assert!(truncated);
     }
     /// A minimal Mach-O 64 dylib: header + LC_ID_DYLIB +
     /// LC_SEGMENT_64 + LC_UUID.
