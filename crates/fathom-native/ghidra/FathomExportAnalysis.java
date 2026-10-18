@@ -367,9 +367,10 @@ public class FathomExportAnalysis extends GhidraScript {
     //   2. qualified name ending in "::target" or ".target"
     //      (Go's main.foo, C++ namespaces, DWARF-qualified names);
     //   3. demangled simple name (Rust v0/legacy mangling, C++);
-    //   4. case-insensitive name or qualified name (Ghidra's Go
-    //      analyzer title-cases some unexported names, e.g. it
-    //      stores corpusFnv1aHash as main.CorpusFnv1aHash);
+    //   4. case-insensitive name or qualified name (defensive:
+    //      some importers normalize case differently from the
+    //      source, and callers routinely query a differently-cased
+    //      form of the recorded name);
     //   5. entry-point address.
     // Rungs 2-4 must match exactly one function; more than one is
     // reported as ambiguous candidates, never a guess.
