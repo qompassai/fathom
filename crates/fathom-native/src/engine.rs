@@ -257,11 +257,23 @@ pub struct Export {
     #[serde(default)]
     pub callers: Option<Vec<String>>,
     #[serde(default)]
+    pub data_strings: Vec<StringInfo>,
+    #[serde(default)]
+    pub data_strings_scan_capped: bool,
+    #[serde(default)]
+    pub data_strings_total: usize,
+    #[serde(default)]
+    pub data_strings_truncated: bool,
+    #[serde(default)]
     pub decompile: Option<Decompile>,
     #[serde(default)]
     pub function: Option<FunctionInfo>,
     #[serde(default)]
+    pub function_candidates: Vec<String>,
+    #[serde(default)]
     pub function_found: Option<bool>,
+    #[serde(default)]
+    pub function_match: Option<String>,
     #[serde(default)]
     pub function_target: Option<String>,
     #[serde(default)]
@@ -396,6 +408,33 @@ mod tests {
         assert_eq!(export.functions[0].classification, "defined");
         assert_eq!(export.symbols[0].kind, "Function");
         assert_eq!(export.memory_blocks[0].size, 4096);
+    }
+
+    #[test]
+    fn validation_export_parses_data_strings_and_match_metadata() {
+        let doc = r#"{
+            "data_strings": [{"address": "00402000", "value": "FATHOM-CORPUS-MARKER"}],
+            "data_strings_scan_capped": true,
+            "data_strings_total": 9,
+            "data_strings_truncated": false,
+            "function_candidates": ["a::target", "b::target"],
+            "function_found": false,
+            "function_match": "none",
+            "program": {
+                "address_size": "64",
+                "compiler_spec": "gcc",
+                "executable_format": "ELF",
+                "image_base": "00400000",
+                "language_id": "x86:LE:64:default",
+                "name": "sample"
+            }
+        }"#;
+        let export = parse_export(doc.as_bytes()).expect("export parses");
+        assert_eq!(export.data_strings.len(), 1);
+        assert_eq!(export.data_strings_total, 9);
+        assert!(export.data_strings_scan_capped);
+        assert_eq!(export.function_candidates.len(), 2);
+        assert_eq!(export.function_match.as_deref(), Some("none"));
     }
 
     /// A scratch per-test directory tree: cache dir, the cached

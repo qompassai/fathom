@@ -26,6 +26,8 @@ import java.util.List;
 import ghidra.app.decompiler.DecompInterface;
 import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.script.GhidraScript;
+import ghidra.app.util.demangler.DemangledObject;
+import ghidra.app.util.demangler.DemanglerUtil;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.DataIterator;
@@ -49,6 +51,15 @@ public class FathomExportAnalysis extends GhidraScript {
     private static final int STRING_CHARS_MAX = 200;
     private static final int STRING_MAX = 5000;
     private static final int SYMBOL_MAX = 20000;
+    // Byte-run string harvest (finds literals Ghidra does not define,
+    // notably unterminated Rust/Go strings): printable-ASCII runs of
+    // at least DATA_STRING_MIN bytes in initialized memory, with an
+    // aggregate scan budget so a huge image cannot make the export
+    // unbounded.
+    private static final int DATA_STRING_MAX = 5000;
+    private static final int DATA_STRING_MIN = 4;
+    private static final long DATA_SCAN_BYTES_MAX = 64L * 1024L * 1024L;
+    private static final int DATA_SCAN_CHUNK_BYTES = 1024 * 1024;
 
     @Override
     public void run() throws Exception {
@@ -174,11 +185,106 @@ public class FathomExportAnalysis extends GhidraScript {
         json.append(",\"symbols\":[").append(String.join(",", symbolRows)).append(']');
         json.append(",\"symbols_total\":").append(symbolTotal);
         json.append(",\"symbols_truncated\":").append(symbolTotal > symbolRows.size());
+
+        appendDataStrings(json);
+    }
+
+    // Harvest printable-ASCII byte runs from initialized memory.
+    // Ghidra only *defines* strings it can delimit (a terminator or
+    // a recognized length prefix), which misses the dominant string
+    // form of Rust and Go binaries: unterminated literals sitting in
+    // .rodata. The export reports these separately as data_strings
+    // so the provider can present them as derived evidence, never
+    // silently merged with the defined set.
+    private void appendDataStrings(StringBuilder json) {
+        List<String> rows = new ArrayList<>();
+        long total = 0;
+        long scanned = 0;
+        boolean capped = false;
+        MemoryBlock[] blocks = currentProgram.getMemory().getBlocks();
+        for (MemoryBlock block : blocks) {
+            if (monitor.isCancelled() || capped) {
+                break;
+            }
+            if (!block.isInitialized() || !block.isRead()) {
+                continue;
+            }
+            long remaining = block.getSize();
+            Address cursor = block.getStart();
+            while (remaining > 0) {
+                if (monitor.isCancelled() || scanned >= DATA_SCAN_BYTES_MAX) {
+                    capped = scanned >= DATA_SCAN_BYTES_MAX;
+                    break;
+                }
+                int want = (int) Math.min((long) DATA_SCAN_CHUNK_BYTES, remaining);
+                byte[] buffer = new byte[want];
+                int got;
+                try {
+                    got = block.getBytes(cursor, buffer);
+                } catch (Exception e) {
+                    break; // unreadable range: stop this block, keep others
+                }
+                if (got <= 0) {
+                    break;
+                }
+                scanned += got;
+                long runStart = -1;
+                StringBuilder runText = new StringBuilder();
+                for (int i = 0; i < got; i++) {
+                    int b = buffer[i] & 0xff;
+                    if (b >= 0x20 && b <= 0x7e) {
+                        if (runStart < 0) {
+                            runStart = i;
+                            runText.setLength(0);
+                        }
+                        if (runText.length() < STRING_CHARS_MAX) {
+                            runText.append((char) b);
+                        }
+                    } else {
+                        if (runStart >= 0 && i - runStart >= DATA_STRING_MIN) {
+                            total++;
+                            if (rows.size() < DATA_STRING_MAX) {
+                                rows.add("{\"address\":"
+                                    + quoted(cursor.add(runStart).toString())
+                                    + ",\"value\":" + quoted(runText.toString()) + '}');
+                            }
+                        }
+                        runStart = -1;
+                    }
+                }
+                if (runStart >= 0 && got - runStart >= DATA_STRING_MIN) {
+                    total++;
+                    if (rows.size() < DATA_STRING_MAX) {
+                        rows.add("{\"address\":"
+                            + quoted(cursor.add(runStart).toString())
+                            + ",\"value\":" + quoted(runText.toString()) + '}');
+                    }
+                }
+                cursor = cursor.add(got);
+                remaining -= got;
+            }
+        }
+        json.append(",\"data_strings\":[").append(String.join(",", rows)).append(']');
+        json.append(",\"data_strings_total\":").append(total);
+        json.append(",\"data_strings_truncated\":").append(total > rows.size());
+        json.append(",\"data_strings_scan_capped\":").append(capped);
     }
 
     private void appendFunction(StringBuilder json, String target) {
-        Function fn = findFunction(target);
+        FunctionMatch match = findFunction(target);
+        Function fn = match.function;
         json.append(",\"mode\":\"function\"");
+        json.append(",\"function_match\":").append(quoted(match.via));
+        if (!match.candidates.isEmpty()) {
+            json.append(",\"function_candidates\":[");
+            for (int i = 0; i < match.candidates.size(); i++) {
+                if (i > 0) {
+                    json.append(',');
+                }
+                json.append(quoted(match.candidates.get(i)));
+            }
+            json.append(']');
+        }
         if (fn == null) {
             json.append(",\"function_found\":false");
             json.append(",\"function_target\":").append(quoted(target));
@@ -246,20 +352,112 @@ public class FathomExportAnalysis extends GhidraScript {
         }
     }
 
-    private Function findFunction(String target) {
+    // The outcome of one function lookup: the function (or null),
+    // how it matched, and — when the query was ambiguous — the
+    // candidate names so the provider can report them instead of
+    // silently picking one.
+    private static final class FunctionMatch {
+        final List<String> candidates = new ArrayList<>();
+        Function function;
+        String via = "none";
+    }
+
+    // Resolution ladder (first rung that decides wins):
+    //   1. exact Ghidra name;
+    //   2. qualified name ending in "::target" or ".target"
+    //      (Go's main.foo, C++ namespaces, DWARF-qualified names);
+    //   3. demangled simple name (Rust v0/legacy mangling, C++);
+    //   4. case-insensitive name or qualified name (Ghidra's Go
+    //      analyzer title-cases some unexported names, e.g. it
+    //      stores corpusFnv1aHash as main.CorpusFnv1aHash);
+    //   5. entry-point address.
+    // Rungs 2-4 must match exactly one function; more than one is
+    // reported as ambiguous candidates, never a guess.
+    private FunctionMatch findFunction(String target) {
+        FunctionMatch match = new FunctionMatch();
         FunctionIterator functions =
             currentProgram.getFunctionManager().getFunctions(true);
-        Function byAddress = null;
+        List<Function> all = new ArrayList<>();
         while (functions.hasNext()) {
-            Function fn = functions.next();
+            all.add(functions.next());
+        }
+        for (Function fn : all) {
             if (fn.getName().equals(target)) {
-                return fn;
-            }
-            if (fn.getEntryPoint().toString().equals(target)) {
-                byAddress = fn;
+                match.function = fn;
+                match.via = "exact";
+                return match;
             }
         }
-        return byAddress;
+        List<Function> qualified = new ArrayList<>();
+        for (Function fn : all) {
+            String name = fn.getName();
+            if (name.endsWith("::" + target) || name.endsWith("." + target)) {
+                qualified.add(fn);
+            }
+        }
+        if (qualified.size() == 1) {
+            match.function = qualified.get(0);
+            match.via = "qualified";
+            return match;
+        }
+        if (qualified.size() > 1) {
+            for (Function fn : qualified) {
+                match.candidates.add(fn.getName());
+            }
+            return match;
+        }
+        List<Function> demangled = new ArrayList<>();
+        for (Function fn : all) {
+            try {
+                DemangledObject object =
+                    DemanglerUtil.demangle(currentProgram, fn.getName());
+                if (object != null && target.equals(object.getName())) {
+                    demangled.add(fn);
+                }
+            } catch (Exception e) {
+                // An undemangleable symbol is skipped, never fatal.
+            }
+        }
+        if (demangled.size() == 1) {
+            match.function = demangled.get(0);
+            match.via = "demangled";
+            return match;
+        }
+        if (demangled.size() > 1) {
+            for (Function fn : demangled) {
+                match.candidates.add(fn.getName());
+            }
+            return match;
+        }
+        String targetFolded = target.toLowerCase(java.util.Locale.ROOT);
+        List<Function> casefold = new ArrayList<>();
+        for (Function fn : all) {
+            String folded = fn.getName().toLowerCase(java.util.Locale.ROOT);
+            if (folded.equals(targetFolded)
+                || folded.endsWith("::" + targetFolded)
+                || folded.endsWith("." + targetFolded)) {
+                casefold.add(fn);
+            }
+        }
+        if (casefold.size() == 1) {
+            match.function = casefold.get(0);
+            match.via = "casefold";
+            return match;
+        }
+        if (casefold.size() > 1) {
+            for (Function fn : casefold) {
+                match.candidates.add(fn.getName());
+            }
+            return match;
+        }
+        for (Function fn : all) {
+            if (fn.getEntryPoint().toString().equals(target)) {
+                match.function = fn;
+                match.via = "address";
+                return match;
+            }
+        }
+        return match;
     }
 
     private String functionJson(Function fn) {

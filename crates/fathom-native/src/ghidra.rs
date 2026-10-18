@@ -70,10 +70,21 @@ pub fn analyze_function(_: &Registry, config: &Config, args: &Value) -> Result<V
     evidence.coverage.examined = 1;
     evidence.coverage.total = 1;
     if export.function_found != Some(true) {
-        evidence.add_unknown(
-            "function",
-            format!("Ghidra found no function matching '{name}'"),
-        );
+        if export.function_candidates.is_empty() {
+            evidence.add_unknown(
+                "function",
+                format!("Ghidra found no function matching '{name}'"),
+            );
+        } else {
+            evidence.add_unknown(
+                "function",
+                format!(
+                    "Ghidra found no unique function matching '{name}'; ambiguous \
+                     candidates: {}; re-run with an exact name or an entry-point address",
+                    export.function_candidates.join(", ")
+                ),
+            );
+        }
         return Ok(evidence.to_value());
     }
     let function = export.function.as_ref().ok_or_else(|| {
@@ -90,7 +101,9 @@ pub fn analyze_function(_: &Registry, config: &Config, args: &Value) -> Result<V
             "body_size": function.body_size,
             "calling_convention": function.calling_convention,
             "classification": function.classification,
+            "matched_via": export.function_match,
             "name": function.name,
+            "query": name,
             "signature": function.signature,
         }),
     ));
@@ -174,12 +187,17 @@ pub fn binary_overview(_: &Registry, config: &Config, args: &Value) -> Result<Va
             })).collect::<Vec<_>>(),
         }),
     ));
-    let truncated =
-        export.functions_truncated || export.strings_truncated || export.symbols_truncated;
+    let truncated = export.functions_truncated
+        || export.strings_truncated
+        || export.symbols_truncated
+        || export.data_strings_truncated
+        || export.data_strings_scan_capped;
     evidence.add_finding(Finding::new(
         "inventory",
         Confidence::Observed,
         json!({
+            "data_strings_returned": export.data_strings.len(),
+            "data_strings_total": export.data_strings_total,
             "functions_returned": export.functions.len(),
             "functions_total": export.functions_total,
             "strings_returned": export.strings.len(),
@@ -189,10 +207,14 @@ pub fn binary_overview(_: &Registry, config: &Config, args: &Value) -> Result<Va
             "truncated": truncated,
         }),
     ));
-    evidence.coverage.examined =
-        (export.functions.len() + export.strings.len() + export.symbols.len()) as u64;
-    evidence.coverage.total =
-        (export.functions_total + export.strings_total + export.symbols_total) as u64;
+    evidence.coverage.examined = (export.functions.len()
+        + export.strings.len()
+        + export.symbols.len()
+        + export.data_strings.len()) as u64;
+    evidence.coverage.total = (export.functions_total
+        + export.strings_total
+        + export.symbols_total
+        + export.data_strings_total) as u64;
     evidence.coverage.exhaustive = !truncated;
     Ok(evidence.to_value())
 }
@@ -262,9 +284,42 @@ pub fn list_strings(_: &Registry, config: &Config, args: &Value) -> Result<Value
         finding = finding.with_limitation("string inventory truncated at the count bound");
     }
     evidence.add_finding(finding);
-    evidence.coverage.examined = export.strings.len() as u64;
-    evidence.coverage.total = export.strings_total as u64;
-    evidence.coverage.exhaustive = !export.strings_truncated;
+    // Byte-run harvest: printable-ASCII runs in initialized memory.
+    // This is what finds unterminated string literals (the dominant
+    // Rust/Go form), which Ghidra never defines; it is reported as
+    // derived evidence under its own kind, never merged into the
+    // observed defined-string set.
+    let mut data_finding = Finding::new(
+        "data_strings",
+        Confidence::Derived,
+        json!({
+            "returned": export.data_strings.len(),
+            "strings": export.data_strings.iter().map(|s| json!({
+                "address": s.address, "value": s.value,
+            })).collect::<Vec<_>>(),
+            "total": export.data_strings_total,
+        }),
+    )
+    .with_limitation(
+        "byte-run scan of initialized memory (printable ASCII, 4+ bytes): \
+         includes the defined strings' bytes and any non-string data that \
+         happens to be printable; runs split at 1 MiB scan-chunk boundaries \
+         are reported as separate rows",
+    );
+    if export.data_strings_truncated {
+        data_finding =
+            data_finding.with_limitation("data-string inventory truncated at the count bound");
+    }
+    if export.data_strings_scan_capped {
+        data_finding =
+            data_finding.with_limitation("memory scan stopped at the aggregate byte bound");
+    }
+    evidence.add_finding(data_finding);
+    evidence.coverage.examined = (export.strings.len() + export.data_strings.len()) as u64;
+    evidence.coverage.total = (export.strings_total + export.data_strings_total) as u64;
+    evidence.coverage.exhaustive = !export.strings_truncated
+        && !export.data_strings_truncated
+        && !export.data_strings_scan_capped;
     Ok(evidence.to_value())
 }
 
@@ -293,18 +348,28 @@ pub fn search_inventory(_: &Registry, config: &Config, args: &Value) -> Result<V
         .filter(|s| s.value.to_lowercase().contains(&query))
         .map(|s| json!({"address": s.address, "value": s.value}))
         .collect();
+    let data_string_matches: Vec<Value> = export
+        .data_strings
+        .iter()
+        .filter(|s| s.value.to_lowercase().contains(&query))
+        .map(|s| json!({"address": s.address, "value": s.value}))
+        .collect();
     let symbol_matches: Vec<Value> = export
         .symbols
         .iter()
         .filter(|s| s.name.to_lowercase().contains(&query))
         .map(|s| json!({"address": s.address, "name": s.name, "type": s.kind}))
         .collect();
-    let truncated =
-        export.functions_truncated || export.strings_truncated || export.symbols_truncated;
+    let truncated = export.functions_truncated
+        || export.strings_truncated
+        || export.symbols_truncated
+        || export.data_strings_truncated
+        || export.data_strings_scan_capped;
     let mut finding = Finding::new(
         "matches",
         Confidence::Observed,
         json!({
+            "data_string_matches": data_string_matches,
             "function_matches": function_matches,
             "query": query_raw,
             "string_matches": string_matches,
@@ -315,10 +380,14 @@ pub fn search_inventory(_: &Registry, config: &Config, args: &Value) -> Result<V
         finding = finding.with_limitation("search covered only the retained (truncated) inventory");
     }
     evidence.add_finding(finding);
-    evidence.coverage.examined =
-        (export.functions.len() + export.strings.len() + export.symbols.len()) as u64;
-    evidence.coverage.total =
-        (export.functions_total + export.strings_total + export.symbols_total) as u64;
+    evidence.coverage.examined = (export.functions.len()
+        + export.strings.len()
+        + export.symbols.len()
+        + export.data_strings.len()) as u64;
+    evidence.coverage.total = (export.functions_total
+        + export.strings_total
+        + export.symbols_total
+        + export.data_strings_total) as u64;
     evidence.coverage.exhaustive = !truncated;
     Ok(evidence.to_value())
 }
