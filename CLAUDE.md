@@ -1,6 +1,6 @@
 # CLAUDE.md — fathom
 
-<!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
 Read `AGENTS.md` first (operating discipline), then `SPEC.md`

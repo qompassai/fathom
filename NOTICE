@@ -18,6 +18,4 @@ tools instead of a bound binary session, a batch Ghidra export
 instead of a persistent bridge process), SPEC.md names the deviation
 and the reason.
 
-Licensing of this port: dual-licensed under AGPL-3.0-only OR
-Apache-2.0, at the recipient's choice. See LICENSE (Apache-2.0) and
-LICENSE-AGPL (AGPL-3.0) in this directory.
+Licensing of this port: Apache-2.0. See LICENSE in this directory.

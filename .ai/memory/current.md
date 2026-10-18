@@ -23,7 +23,8 @@ no TypeScript transliterated.
 
 ## Standing rules
 
-- Dual license: AGPL-3.0-only OR Apache-2.0 for first-party code.
+- License: Apache-2.0 for first-party code (aligned 2026-10-17,
+  Matt's ruling; originally dual AGPL-3.0-only OR Apache-2.0).
 - Evidence honesty is the product: observed / derived / inferred
   stay distinct; scaffolds return `capability_unavailable`.
 - Policy is deterministic and fail-closed; execute/observe tools

@@ -1,6 +1,6 @@
 # fathom — Specification
 
-<!-- SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0 -->
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
 Rust port of REA (Reverse Engineer Anything). This document
@@ -435,9 +435,9 @@ analyst acts on what the tool claims it saw.
 
 ## 12. Licensing
 
-First-party code: dual-licensed AGPL-3.0-only OR Apache-2.0
-(SPDX `AGPL-3.0-only OR Apache-2.0`), per the estate pattern of
-2026-10-10. Design source credited in NOTICE (morluto/rea, MIT).
+First-party code: Apache-2.0 (SPDX `Apache-2.0`), aligned
+2026-10-17 per Matt's ruling; originally dual-licensed
+AGPL-3.0-only OR Apache-2.0 per the estate pattern of 2026-10-10. Design source credited in NOTICE (morluto/rea, MIT).
 The Ghidra export script is original Java written against
 Ghidra's public script API, following the estate's existing
 diver precedent.

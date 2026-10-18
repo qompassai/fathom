@@ -1,7 +1,7 @@
 # #################################################################
 # /qompassai/fathom/shell.nix
 # Qompass AI Flake-Compat Shell Shim
-# SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
 # Non-flake entry point: lands `nix-shell` users in the same shell

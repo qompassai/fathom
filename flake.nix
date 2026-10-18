@@ -1,7 +1,7 @@
 # #################################################################
 # /qompassai/fathom/flake.nix
 # Qompass AI fathom — Flake
-# SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Qompass AI
 #
 # Original work of Qompass AI (2026-10-10).

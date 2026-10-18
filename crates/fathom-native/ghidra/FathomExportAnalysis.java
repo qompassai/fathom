@@ -12,7 +12,7 @@
 // diver's DiverExportAnalysis.java; requires no network and writes
 // nowhere outside the export directory.
 //
-// SPDX-License-Identifier: AGPL-3.0-only OR Apache-2.0
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2026 Qompass AI
 //
 //@category Rea
