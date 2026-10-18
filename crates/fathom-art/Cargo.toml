@@ -1,0 +1,17 @@
+[package]
+name = "fathom-art"
+version = "0.1.0"
+description = "Art/animation style reverse engineering for fathom: measured style specs, native palette transforms, and a lumen conversion bridge"
+license = "Apache-2.0"
+repository = "https://github.com/qompassai/fathom"
+edition = "2024"
+
+[dependencies]
+# fathom-core: evidence envelopes, policy, registry, paths.
+fathom-core = { version = "0.1.0", path = "../fathom-core" }
+# image: PNG/JPEG/GIF decode + PNG encode. Default features are off:
+# the provider accepts exactly these three formats and declares
+# anything else an unsupported target.
+image = { version = "0.25", default-features = false, features = ["gif", "jpeg", "png"] }
+# serde_json: evidence facts + the lumen document model.
+serde_json = "1"

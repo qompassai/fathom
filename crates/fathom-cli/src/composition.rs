@@ -9,6 +9,7 @@ use crate::core_tools;
 pub fn build_registry() -> Registry {
     let mut registry = Registry::new();
     core_tools::register(&mut registry);
+    fathom_art::register(&mut registry);
     fathom_js::register(&mut registry);
     fathom_managed::register(&mut registry);
     fathom_native::register(&mut registry);

@@ -98,8 +98,10 @@ Tools (alphabetical; status = this run):
 
 | Tool | Class | Provider | Status |
 | --- | --- | --- | --- |
+| `analyze_art_style` | read | art | built |
 | `analyze_function` | read | ghidra | built |
 | `analyze_javascript_application` | read | js | built |
+| `apply_style_via_lumen` | execute | art | built (bridge to lumen stdio MCP) |
 | `binary_overview` | read | ghidra | built |
 | `capture_process` | execute | process | built (pipes; PTY scaffolded) |
 | `compare_artifacts` | read | core | built |
@@ -117,6 +119,7 @@ Tools (alphabetical; status = this run):
 | `list_names` | read | ghidra | built |
 | `list_strings` | read | ghidra | built |
 | `observe_browser` | observe | browser | built (Chromium headless DOM inventory) |
+| `remap_palette` | execute | art | built |
 | `search_inventory` | read | ghidra | built |
 | `session_info` | read | core | built |
 | `verify_evidence_bundle` | read | core | built |
@@ -379,6 +382,51 @@ decoded-CIL fingerprint is the stage that follows).
   UUID, and exports/imports where present, per architecture
   for fat binaries. The projection does not resolve the load
   graph against any filesystem.
+
+### 9.5 Art / animation style (fathom-art)
+
+Style reverse engineering under the same evidence discipline:
+every descriptor is a measurement on the decoded asset —
+observed, derived (with the classification rule stated as a
+limitation), or an explicit unknown. Nothing is inferred from
+filenames, metadata, or priors.
+
+- `analyze_art_style` (read): PNG/JPEG/GIF. Palette by
+  deterministic median-cut over opaque pixels (alpha >= 128),
+  sampled on a fixed stride past the sample bound; HSL grade
+  statistics (saturation-weighted circular mean hue, lightness
+  percentiles, populated-level count); a rule-classified
+  shading model (flat / cel / soft / mixed — the rule ships in
+  the finding's limitations); per-neighbour gradient and edge
+  fractions. For GIF: the timing grammar is read by walking
+  the block stream directly (graphic-control delays, the
+  NETSCAPE2.0 loop extension) — frame durations, holds,
+  total, loop behavior — plus a motion curve over decoded
+  frames and an easing classification. Sprite-sheet geometry
+  is claimed only when fully transparent gutter bands divide
+  both axes into uniform cells; otherwise it is an unknown.
+- `remap_palette` (execute): the native transform. Exact or
+  nearest (RGB distance) remap to a caller palette or to
+  another asset's measured palette; outputs are PNG files
+  under the state dir, addressed by bare file name. This is
+  the deterministic end of the conversion line: arithmetic
+  on measured values, no rendering judgment.
+- `apply_style_via_lumen` (execute): the conversion bridge.
+  Grading/rendering is lumen's work, never a second engine
+  here. Fathom wraps the image in a single-layer lumen
+  document (stored form, layers as base64 PNG), spawns the
+  allowlisted lumen program as a stdio MCP server in a
+  scratch project root under the state dir, requires the
+  preset to appear in lumen's own `style_list`, and calls
+  `style_apply`. The graded document is composited and
+  re-measured; with a reference target, the output spec is
+  verified against the reference spec under stated tolerances
+  (hue 12 degrees, lightness/saturation 0.08, coverage-weighted
+  palette distance 24 RGB units) — out-of-tolerance checks are
+  unknowns, not silent passes. Without a reference, closeness
+  is an explicit unknown, and preset numeric parameters are
+  declared lumen-internal (`style_list` reports names and
+  descriptions only).
 
 ## 10. Surfaces
 

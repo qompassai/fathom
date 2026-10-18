@@ -14,6 +14,7 @@ path = "src/main.rs"
 axum.workspace = true
 clap.workspace = true
 fathom-a2a = { path = "../fathom-a2a" }
+fathom-art = { path = "../fathom-art" }
 fathom-core = { path = "../fathom-core" }
 fathom-js = { path = "../fathom-js" }
 fathom-managed = { path = "../fathom-managed" }
