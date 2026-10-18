@@ -218,11 +218,14 @@ pub struct ManagedInventory {
     pub table_rows: BTreeMap<String, u32>,
     pub type_refs: Vec<String>,
     pub types: Vec<TypeInfo>,
+    pub user_strings: Vec<String>,
+    pub user_strings_truncated: bool,
 }
 
 struct Heaps<'a> {
     blob: &'a [u8],
     strings: &'a [u8],
+    user_strings: &'a [u8],
 }
 
 struct Tables<'a> {
@@ -354,6 +357,47 @@ fn heap_blob<'a>(heaps: &Heaps<'a>, index: u64) -> Result<&'a [u8], FathomError>
         .ok_or_else(|| malformed("blob overruns the heap"))
 }
 
+const USER_STRING_CHARS_MAX: usize = 512;
+const USER_STRING_MAX: usize = 4096;
+
+/// Decode the #US (user strings) heap (ECMA-335 II.24.2.4): a
+/// reserved zero byte, then entries of a compressed length, that
+/// many bytes of UTF-16LE character data, and one terminal flag
+/// byte. These are the string literals `ldstr` loads — the
+/// managed counterpart of a native binary's string table, and
+/// the place user-facing markers live. Returns the strings and
+/// whether the entry cap cut the heap short.
+fn parse_user_strings(heap: &[u8]) -> Result<(Vec<String>, bool), FathomError> {
+    let mut strings = Vec::new();
+    let mut pos = 1_usize;
+    while pos < heap.len() {
+        if strings.len() >= USER_STRING_MAX {
+            return Ok((strings, true));
+        }
+        let (byte_len, consumed) = read_compressed(heap, pos)?;
+        let payload_start = pos + consumed;
+        let payload_end = payload_start + byte_len as usize;
+        let payload = heap
+            .get(payload_start..payload_end)
+            .ok_or_else(|| malformed("user string overruns the #US heap"))?;
+        // The final payload byte is a terminal flag, not a char.
+        let char_bytes = &payload[..payload.len().saturating_sub(1)];
+        let units: Vec<u16> = char_bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let text: String = String::from_utf16_lossy(&units)
+            .chars()
+            .take(USER_STRING_CHARS_MAX)
+            .collect();
+        if !text.is_empty() {
+            strings.push(text);
+        }
+        pos = payload_end;
+    }
+    Ok((strings, false))
+}
+
 /// Parse a whole PE file. `Ok(None)` = a PE with no CLI header
 /// (native). Errors = not a PE, or managed metadata is malformed.
 pub fn parse_pe(bytes: &[u8]) -> Result<Option<ManagedInventory>, FathomError> {
@@ -431,6 +475,9 @@ fn parse_metadata_root(bytes: &[u8], root: usize) -> Result<Option<ManagedInvent
     let heaps = Heaps {
         blob: stream("#Blob")?,
         strings: stream("#Strings")?,
+        // #US is optional in principle; its absence means no
+        // user strings, not malformed metadata.
+        user_strings: stream("#US").unwrap_or(&[]),
     };
     let tables = parse_tables_header(tables_bytes)?;
     extract_inventory(&tables, &heaps, runtime_version).map(Some)
@@ -660,6 +707,7 @@ fn extract_inventory(
             table_rows.insert(format!("table_{table_id}"), row_count);
         }
     }
+    let (user_strings, user_strings_truncated) = parse_user_strings(heaps.user_strings)?;
     Ok(ManagedInventory {
         assembly,
         assembly_refs,
@@ -670,6 +718,8 @@ fn extract_inventory(
         table_rows,
         type_refs,
         types,
+        user_strings,
+        user_strings_truncated,
     })
 }
 
@@ -752,6 +802,7 @@ mod tests {
         let heaps = Heaps {
             blob: &[0],
             strings,
+            user_strings: &[],
         };
         let inventory = extract_inventory(&tables, &heaps, "v4.0.30319".to_string()).unwrap();
         assert_eq!(inventory.types.len(), 1);
@@ -762,5 +813,53 @@ mod tests {
         assert_eq!(inventory.methods.len(), 1);
         assert_eq!(inventory.methods[0].owner, "System.Widget");
         assert_eq!(inventory.methods[0].rva, 0x2000);
+    }
+
+    /// Build one #US heap: reserved zero byte + entries.
+    fn us_heap(entries: &[&str]) -> Vec<u8> {
+        let mut heap = vec![0_u8];
+        for entry in entries {
+            let mut payload = Vec::new();
+            for unit in entry.encode_utf16() {
+                payload.extend_from_slice(&unit.to_le_bytes());
+            }
+            payload.push(0); // terminal flag byte
+            assert!(payload.len() < 0x80);
+            heap.push(payload.len() as u8);
+            heap.extend_from_slice(&payload);
+        }
+        heap
+    }
+
+    #[test]
+    fn validation_user_strings_decode() {
+        let heap = us_heap(&["Hello", "FATHOM-CORPUS-MARKER-csharp-7f3a"]);
+        let (strings, truncated) = parse_user_strings(&heap).unwrap();
+        assert_eq!(
+            strings,
+            vec![
+                "Hello".to_string(),
+                "FATHOM-CORPUS-MARKER-csharp-7f3a".to_string()
+            ]
+        );
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn adversarial_user_strings_overrun_rejected() {
+        // Length prefix claims 127 payload bytes; one is present.
+        let heap = vec![0_u8, 0x7f, b'A'];
+        assert!(parse_user_strings(&heap).is_err());
+    }
+
+    #[test]
+    fn adversarial_user_strings_cap_is_reported() {
+        let mut heap = vec![0_u8];
+        for _ in 0..(USER_STRING_MAX + 3) {
+            heap.extend_from_slice(&[3, b'x', 0, 0]); // len 3: 'x' + terminal
+        }
+        let (strings, truncated) = parse_user_strings(&heap).unwrap();
+        assert_eq!(strings.len(), USER_STRING_MAX);
+        assert!(truncated);
     }
 }

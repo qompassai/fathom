@@ -98,6 +98,19 @@ fn inspect_managed_assembly(
             }),
         ));
     }
+    if !inventory.user_strings.is_empty() {
+        // #US heap literals (what `ldstr` loads): the managed
+        // string table, previously not surfaced at all.
+        evidence.add_finding(Finding::new(
+            "user_strings",
+            Confidence::Observed,
+            json!({
+                "count": inventory.user_strings.len(),
+                "strings": inventory.user_strings,
+                "truncated": inventory.user_strings_truncated,
+            }),
+        ));
+    }
     evidence.add_unknown(
         "cil_bodies",
         "CIL method bodies are not decoded in this stage; method facts are metadata-level (name, RVA, signature digest)",
