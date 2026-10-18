@@ -135,7 +135,11 @@ fn scan_push4(bytes: &[u8]) -> Vec<Push4Site> {
                     .map(|b| format!("{b:02x}"))
                     .collect::<String>();
                 sites.push(Push4Site {
-                    followed_by_eq: bytes[pc + 5] == OP_EQ,
+                    // The EQ peek must not read past the end: a PUSH4
+                    // whose immediate ends exactly at the buffer end
+                    // has no following byte (this read panicked before
+                    // the fix — bytecode `0x63a9059cbb` killed the tool).
+                    followed_by_eq: bytes.get(pc + 5).copied() == Some(OP_EQ),
                     offset: pc,
                     selector,
                 });
@@ -234,5 +238,25 @@ mod tests {
         assert!(decode_hex("zzzz").is_err());
         assert!(decode_hex("").is_err());
         assert_eq!(decode_hex("0x00ff").unwrap(), vec![0x00, 0xff]);
+    }
+
+    #[test]
+    fn adversarial_push4_ending_at_buffer_end_does_not_panic() {
+        // Regression: this exact shape (a complete PUSH4 as the final
+        // instruction) indexed one byte past the buffer and panicked
+        // across the tool boundary.
+        let bytes = vec![0x63, 0xa9, 0x05, 0x9c, 0xbb];
+        let sites = scan_push4(&bytes);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].selector, "a9059cbb");
+        assert!(!sites[0].followed_by_eq);
+    }
+
+    #[test]
+    fn validation_push4_with_eq_as_final_byte_is_seen() {
+        let bytes = vec![0x63, 0xde, 0xad, 0xbe, 0xef, 0x14];
+        let sites = scan_push4(&bytes);
+        assert_eq!(sites.len(), 1);
+        assert!(sites[0].followed_by_eq);
     }
 }
