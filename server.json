@@ -3,8 +3,8 @@
   "name": "ai.qompass/fathom",
   "title": "Fathom",
   "description": "Reverse-engineering tools for agents over MCP/A2A, with evidence-carrying findings.",
-  "version": "0.1.0",
-  "websiteUrl": "https://qompass.ai/mcp/fathom",
+  "version": "0.1.1",
+  "websiteUrl": "https://qompass.ai/solutions/fathom/",
   "repository": {
     "url": "https://github.com/qompassai/fathom",
     "source": "github"
@@ -12,8 +12,8 @@
   "packages": [
     {
       "registryType": "mcpb",
-      "identifier": "https://github.com/qompassai/fathom/releases/download/v0.1.0/fathom-mcp-0.1.0-linux-x64.mcpb",
-      "fileSha256": "05fb29888bd98e15eb4d09100aba6df0efe685def99d455c4c8b08c4a28e0bb2",
+      "identifier": "https://github.com/qompassai/fathom/releases/download/v0.1.1/fathom-mcp-0.1.1-linux-x64.mcpb",
+      "fileSha256": "31e6127f1c9fdeccf43bb95073e201ecc6f6959caab64c05a7ba915f5e8bbe19",
       "transport": {
         "type": "stdio"
       }
@@ -24,7 +24,7 @@
       "ai.qompass/identity": {
         "publisher": "Qompass AI",
         "about": "https://qompass.ai/about",
-        "mcpCatalog": "https://qompass.ai/mcp",
+        "mcpCatalog": "https://qompass.ai/solutions/mcp-servers/",
         "contact": "mailto:map@qompass.ai",
         "githubOrganization": "https://github.com/qompassai",
         "githubMaintainer": "https://github.com/PhaedrusFlow",
