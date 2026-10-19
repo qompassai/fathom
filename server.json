@@ -1,0 +1,39 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.qompass/fathom",
+  "title": "Fathom",
+  "description": "Reverse-engineering tool provider for agents over MCP/A2A: evidence-carrying findings behind a fail-closed policy gate.",
+  "version": "0.1.0",
+  "websiteUrl": "https://qompass.ai/mcp/fathom",
+  "repository": {
+    "url": "https://github.com/qompassai/fathom",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/qompassai/fathom/releases/download/v0.1.0/fathom-mcp-0.1.0-linux-x64.mcpb",
+      "fileSha256": "05fb29888bd98e15eb4d09100aba6df0efe685def99d455c4c8b08c4a28e0bb2",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ],
+  "_meta": {
+    "io.modelcontextprotocol.registry/publisher-provided": {
+      "ai.qompass/identity": {
+        "publisher": "Qompass AI",
+        "about": "https://qompass.ai/about",
+        "mcpCatalog": "https://qompass.ai/mcp",
+        "contact": "mailto:map@qompass.ai",
+        "githubOrganization": "https://github.com/qompassai",
+        "githubMaintainer": "https://github.com/PhaedrusFlow",
+        "gitlabMaintainer": "https://gitlab.com/PhaedrusFlow",
+        "cratesIoMaintainer": "https://crates.io/users/PhaedrusFlow",
+        "huggingFace": "https://huggingface.co/qompass",
+        "orcid": "https://orcid.org/0000-0002-0302-4812",
+        "zenodoCommunity": "https://zenodo.org/communities/qompassai"
+      }
+    }
+  }
+}
