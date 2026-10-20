@@ -3,6 +3,7 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
+<a href="https://doi.org/10.5281/zenodo.23503520"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23503520.svg" alt="DOI"></a>
 
 Rust port of REA (Reverse Engineer Anything): one
 provider-neutral MCP server for reverse engineering — native
