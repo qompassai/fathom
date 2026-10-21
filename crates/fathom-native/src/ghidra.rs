@@ -18,6 +18,7 @@ use crate::engine::{self, Export, FunctionInfo};
 pub mod functions;
 pub mod program;
 pub(crate) mod query;
+pub mod search;
 pub mod types;
 pub mod xrefs;
 

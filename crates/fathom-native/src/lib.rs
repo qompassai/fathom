@@ -145,6 +145,41 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "convert_number",
+            ToolClass::Read,
+            "local",
+            "Hex/decimal/octal/binary/byte views of one integer at a width (no target)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "bits": {"type": "integer", "enum": [8, 16, 32, 64]},
+                    "value": {"type": ["string", "integer"]},
+                },
+                "required": ["value"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(ghidra::search::convert_number),
+    );
+    registry.register(
+        descriptor(
+            "disassemble_bytes",
+            ToolClass::Read,
+            "ghidra",
+            "Read-only linear disassembly of up to 4,096 bytes from an address",
+            target_and(
+                json!({
+                    "address": {"type": "string"},
+                    "length": {"type": "integer", "minimum": 1,
+                        "maximum": fathom_core::limits::DISASSEMBLE_BYTES_MAX},
+                }),
+                &["address", "length"],
+            ),
+        ),
+        Arc::new(ghidra::search::disassemble_bytes),
+    );
+    registry.register(
+        descriptor(
             "find_next_undefined_function",
             ToolClass::Read,
             "ghidra",
@@ -868,6 +903,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "search_byte_patterns",
+            ToolClass::Read,
+            "ghidra",
+            "Masked byte-pattern search over initialized memory ('48 8b ?? 05'; paged)",
+            target_and(
+                with_page(json!({"pattern": {"type": "string"}})),
+                &["pattern"],
+            ),
+        ),
+        Arc::new(ghidra::search::search_byte_patterns),
+    );
+    registry.register(
+        descriptor(
             "search_data_types",
             ToolClass::Read,
             "ghidra",
@@ -885,6 +933,22 @@ pub fn register(registry: &mut Registry) {
             target_and(with_page(json!({"tag": {"type": "string"}})), &["tag"]),
         ),
         Arc::new(ghidra::functions::search_functions_by_tag),
+    );
+    registry.register(
+        descriptor(
+            "search_instructions",
+            ToolClass::Read,
+            "ghidra",
+            "Instructions by exact mnemonic or rendered-text substring (paged)",
+            target_and(
+                with_page(json!({
+                    "match": {"type": "string", "enum": ["mnemonic", "text"]},
+                    "query": {"type": "string"},
+                })),
+                &["query"],
+            ),
+        ),
+        Arc::new(ghidra::search::search_instructions),
     );
     registry.register(
         descriptor(
