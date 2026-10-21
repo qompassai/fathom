@@ -159,6 +159,26 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "get_data_type_size",
+            ToolClass::Read,
+            "ghidra",
+            "Length Ghidra records for one named data type (name or /category/path)",
+            target_and(json!({"name": {"type": "string"}}), &["name"]),
+        ),
+        Arc::new(ghidra::types::get_data_type_size),
+    );
+    registry.register(
+        descriptor(
+            "get_enum_values",
+            ToolClass::Read,
+            "ghidra",
+            "Names and values of one enum data type",
+            target_and(json!({"name": {"type": "string"}}), &["name"]),
+        ),
+        Arc::new(ghidra::types::get_enum_values),
+    );
+    registry.register(
+        descriptor(
             "get_full_call_graph",
             ToolClass::Read,
             "ghidra",
@@ -250,6 +270,36 @@ pub fn register(registry: &mut Registry) {
             target_and(json!({"function": {"type": "string"}}), &["function"]),
         ),
         Arc::new(ghidra::xrefs::get_function_xrefs),
+    );
+    registry.register(
+        descriptor(
+            "get_struct_layout",
+            ToolClass::Read,
+            "ghidra",
+            "Defined components of a structure or union, with undefined regions",
+            target_and(json!({"name": {"type": "string"}}), &["name"]),
+        ),
+        Arc::new(ghidra::types::get_struct_layout),
+    );
+    registry.register(
+        descriptor(
+            "get_type_size",
+            ToolClass::Read,
+            "ghidra",
+            "Size a type expression denotes ('char *', 'uint[16]'), derived by a stated grammar",
+            target_and(json!({"type": {"type": "string"}}), &["type"]),
+        ),
+        Arc::new(ghidra::types::get_type_size),
+    );
+    registry.register(
+        descriptor(
+            "get_valid_data_types",
+            ToolClass::Read,
+            "ghidra",
+            "Built-in and program-defined data type names (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::types::get_valid_data_types),
     );
     registry.register(
         descriptor(
@@ -456,6 +506,34 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "list_data_type_categories",
+            ToolClass::Read,
+            "ghidra",
+            "Data type categories with type and subcategory counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::types::list_data_type_categories),
+    );
+    registry.register(
+        descriptor(
+            "list_data_types",
+            ToolClass::Read,
+            "ghidra",
+            "Program data types, optionally filtered by category or kind (paged)",
+            target_and(
+                with_page(json!({
+                    "category": {"type": "string"},
+                    "kind": {"type": "string", "enum": ["array", "builtin", "enum",
+                        "function_definition", "other", "pointer", "structure", "typedef",
+                        "union"]},
+                })),
+                &[],
+            ),
+        ),
+        Arc::new(ghidra::types::list_data_types),
+    );
+    registry.register(
+        descriptor(
             "list_function_tags",
             ToolClass::Read,
             "ghidra",
@@ -513,6 +591,16 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "search_data_types",
+            ToolClass::Read,
+            "ghidra",
+            "Case-insensitive substring search over data type paths (paged)",
+            target_and(with_page(json!({"query": {"type": "string"}})), &["query"]),
+        ),
+        Arc::new(ghidra::types::search_data_types),
+    );
+    registry.register(
+        descriptor(
             "search_functions_by_tag",
             ToolClass::Read,
             "ghidra",
@@ -538,5 +626,35 @@ pub fn register(registry: &mut Registry) {
             }),
         ),
         Arc::new(ghidra::search_inventory),
+    );
+    registry.register(
+        descriptor(
+            "validate_data_type",
+            ToolClass::Read,
+            "ghidra",
+            "Whether a type expression parses and resolves, with the reason if not",
+            target_and(json!({"type": {"type": "string"}}), &["type"]),
+        ),
+        Arc::new(ghidra::types::validate_data_type),
+    );
+    registry.register(
+        descriptor(
+            "validate_data_type_exists",
+            ToolClass::Read,
+            "ghidra",
+            "Whether a data type name exists in the program or Ghidra's built-ins",
+            target_and(json!({"name": {"type": "string"}}), &["name"]),
+        ),
+        Arc::new(ghidra::types::validate_data_type_exists),
+    );
+    registry.register(
+        descriptor(
+            "validate_function_prototype",
+            ToolClass::Read,
+            "ghidra",
+            "Whether a C prototype's return and parameter types resolve in the program",
+            target_and(json!({"prototype": {"type": "string"}}), &["prototype"]),
+        ),
+        Arc::new(ghidra::types::validate_function_prototype),
     );
 }

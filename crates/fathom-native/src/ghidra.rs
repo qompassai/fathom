@@ -17,6 +17,7 @@ use crate::engine::{self, Export, FunctionInfo};
 
 pub mod functions;
 pub(crate) mod query;
+pub mod types;
 pub mod xrefs;
 
 pub(crate) fn subject_and_export(
