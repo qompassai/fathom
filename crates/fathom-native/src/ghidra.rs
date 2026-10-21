@@ -15,7 +15,11 @@ use fathom_core::registry::{Registry, require_str};
 
 use crate::engine::{self, Export, FunctionInfo};
 
-fn subject_and_export(
+pub mod functions;
+pub(crate) mod query;
+pub mod xrefs;
+
+pub(crate) fn subject_and_export(
     config: &Config,
     args: &Value,
     mode: &str,
@@ -35,7 +39,7 @@ fn subject_and_export(
     Ok((subject, export))
 }
 
-fn base(tool: &str, subject: Subject) -> Evidence {
+pub(crate) fn base(tool: &str, subject: Subject) -> Evidence {
     let mut evidence = Evidence::new(tool, "ghidra");
     evidence.subject = Some(subject);
     evidence

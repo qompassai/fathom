@@ -18,16 +18,23 @@ pub mod il2cpp;
 pub mod layout;
 pub mod python;
 pub mod renpy;
+pub mod sections;
 pub mod unity;
 pub mod unreal;
 
 pub use engine::locate_headless;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 use fathom_core::policy::ToolClass;
 use fathom_core::registry::{Registry, descriptor, target_schema};
+
+/// SPEC anchor for read-core rows that would mutate the cached
+/// Ghidra project: the batch-export cache is keyed by subject
+/// SHA-256, not project revision, so a write would silently stale
+/// every cached export. The transactional mutation path is G2.
+const SPEC_MUTATION_PATH: &str = "§9.1 (mutation path: Ghidra G2)";
 
 /// The `{target}` schema plus the paging arguments the retained
 /// inventory reads accept (SPEC §9.1 read pattern).
@@ -46,8 +53,55 @@ fn inventory_schema() -> serde_json::Value {
     })
 }
 
-/// Register the native provider's tools, all implemented.
+/// The `{target, ...}` schema: `properties` plus the target path,
+/// `required` plus `target`, no additional properties.
+fn target_and(properties: Value, required: &[&str]) -> Value {
+    let mut merged = properties.as_object().cloned().unwrap_or_default();
+    merged.insert(
+        "target".into(),
+        json!({"type": "string", "description": "Path under a configured target root"}),
+    );
+    let mut required: Vec<&str> = required.to_vec();
+    required.push("target");
+    required.sort_unstable();
+    json!({
+        "type": "object",
+        "properties": merged,
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
+/// `properties` plus the paged-listing `offset`/`limit` pair.
+fn with_page(properties: Value) -> Value {
+    let mut merged = properties.as_object().cloned().unwrap_or_default();
+    if let Some(page) = ghidra::query::page_properties().as_object() {
+        merged.extend(page.clone());
+    }
+    Value::Object(merged)
+}
+
+/// Register the native provider's tools. Read-core rows that
+/// would write are registered not-implemented with their reason.
 pub fn register(registry: &mut Registry) {
+    registry.register_not_implemented(
+        descriptor(
+            "add_memory_reference",
+            ToolClass::Execute,
+            "ghidra",
+            "Add a memory reference — not implemented: writes to the cached project \
+             await the G2 mutation path",
+            target_and(
+                json!({
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                    "type": {"type": "string"},
+                }),
+                &["from", "to"],
+            ),
+        ),
+        SPEC_MUTATION_PATH,
+    );
     registry.register(
         descriptor(
             "analyze_function",
@@ -78,6 +132,150 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::binary_overview),
+    );
+    registry.register(
+        descriptor(
+            "find_next_undefined_function",
+            ToolClass::Read,
+            "ghidra",
+            "Next instructions (at or after 'start') that no function body covers",
+            target_and(json!({"start": {"type": "string"}}), &[]),
+        ),
+        Arc::new(ghidra::functions::find_next_undefined_function),
+    );
+    registry.register(
+        descriptor(
+            "get_bulk_xrefs",
+            ToolClass::Read,
+            "ghidra",
+            "References to and from up to 32 addresses in one engine run",
+            target_and(
+                json!({"addresses": {"type": "array", "items": {"type": "string"},
+                    "minItems": 1, "maxItems": fathom_core::limits::ADDRESS_QUERY_COUNT_MAX}}),
+                &["addresses"],
+            ),
+        ),
+        Arc::new(ghidra::xrefs::get_bulk_xrefs),
+    );
+    registry.register(
+        descriptor(
+            "get_full_call_graph",
+            ToolClass::Read,
+            "ghidra",
+            "Every resolved call edge in the program (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::functions::get_full_call_graph),
+    );
+    registry.register(
+        descriptor(
+            "get_function_call_graph",
+            ToolClass::Read,
+            "ghidra",
+            "Call-graph neighborhood of one function to a bounded depth",
+            target_and(
+                json!({
+                    "depth": {"type": "integer", "minimum": 1,
+                        "maximum": fathom_core::limits::CALL_GRAPH_DEPTH_MAX},
+                    "direction": {"type": "string", "enum": ["both", "callees", "callers"]},
+                    "function": {"type": "string"},
+                }),
+                &["function"],
+            ),
+        ),
+        Arc::new(ghidra::functions::get_function_call_graph),
+    );
+    registry.register(
+        descriptor(
+            "get_function_jump_targets",
+            ToolClass::Read,
+            "ghidra",
+            "Jump instructions in a function and their resolved targets",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::functions::get_function_jump_targets),
+    );
+    registry.register(
+        descriptor(
+            "get_function_labels",
+            ToolClass::Read,
+            "ghidra",
+            "Label symbols stored inside a function body",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::functions::get_function_labels),
+    );
+    registry.register(
+        descriptor(
+            "get_function_pcode",
+            ToolClass::Read,
+            "ghidra",
+            "Raw p-code per instruction, or the decompiler's high p-code (paged)",
+            target_and(
+                with_page(json!({
+                    "function": {"type": "string"},
+                    "high": {"type": "boolean"},
+                })),
+                &["function"],
+            ),
+        ),
+        Arc::new(ghidra::functions::get_function_pcode),
+    );
+    registry.register(
+        descriptor(
+            "get_function_tags",
+            ToolClass::Read,
+            "ghidra",
+            "Function tags applied to one function",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::functions::get_function_tags),
+    );
+    registry.register(
+        descriptor(
+            "get_function_variables",
+            ToolClass::Read,
+            "ghidra",
+            "Listing parameters and locals, plus the decompiler's variables",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::functions::get_function_variables),
+    );
+    registry.register(
+        descriptor(
+            "get_function_xrefs",
+            ToolClass::Read,
+            "ghidra",
+            "References into a function's entry and out of its instructions",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::xrefs::get_function_xrefs),
+    );
+    registry.register(
+        descriptor(
+            "get_xrefs_from",
+            ToolClass::Read,
+            "ghidra",
+            "References recorded from one address (paged)",
+            target_and(
+                with_page(json!({"address": {"type": "string"}})),
+                &["address"],
+            ),
+        ),
+        Arc::new(ghidra::xrefs::get_xrefs_from),
+    );
+    registry.register(
+        descriptor(
+            "get_xrefs_to",
+            ToolClass::Read,
+            "ghidra",
+            "References to one address, with referencing functions (paged)",
+            target_and(
+                with_page(json!({"address": {"type": "string"}})),
+                &["address"],
+            ),
+        ),
+        Arc::new(ghidra::xrefs::get_xrefs_to),
     );
     registry.register(
         descriptor(
@@ -258,6 +456,16 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "list_function_tags",
+            ToolClass::Read,
+            "ghidra",
+            "Function tags defined in the program, with use counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::functions::list_function_tags),
+    );
+    registry.register(
+        descriptor(
             "list_functions",
             ToolClass::Read,
             "ghidra",
@@ -288,6 +496,30 @@ pub fn register(registry: &mut Registry) {
             inventory_schema(),
         ),
         Arc::new(ghidra::list_strings),
+    );
+    registry.register_not_implemented(
+        descriptor(
+            "remove_reference",
+            ToolClass::Execute,
+            "ghidra",
+            "Remove a reference — not implemented: writes to the cached project \
+             await the G2 mutation path",
+            target_and(
+                json!({"from": {"type": "string"}, "to": {"type": "string"}}),
+                &["from", "to"],
+            ),
+        ),
+        SPEC_MUTATION_PATH,
+    );
+    registry.register(
+        descriptor(
+            "search_functions_by_tag",
+            ToolClass::Read,
+            "ghidra",
+            "Functions carrying one tag (exact, case-sensitive; paged)",
+            target_and(with_page(json!({"tag": {"type": "string"}})), &["tag"]),
+        ),
+        Arc::new(ghidra::functions::search_functions_by_tag),
     );
     registry.register(
         descriptor(

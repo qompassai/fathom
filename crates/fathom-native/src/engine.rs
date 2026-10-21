@@ -20,6 +20,11 @@ use fathom_core::limits::{
 use fathom_core::paths;
 use fathom_core::process::{ProcessSpec, run};
 
+use crate::sections::{
+    AddressFacts, ByteSearch, CallGraph, DecompileRow, Detail, Disassembly, InstructionSearch,
+    ProgramFacts, Types,
+};
+
 /// Locate Ghidra's `analyzeHeadless`: explicit config first,
 /// then `FATHOM_GHIDRA_HEADLESS`, then `$PATH`, then the Arch
 /// package location. Returns the first candidate that exists.
@@ -107,6 +112,17 @@ fn provider_timeout_secs(first_import: bool) -> u64 {
     }
 }
 
+/// SHA-256 of the export script the engine will run.
+fn script_digest(script_dir: &Path) -> Result<String, FathomError> {
+    let bytes = fs::read(script_dir.join("FathomExportAnalysis.java")).map_err(|e| {
+        FathomError::new(
+            ErrorCode::ProviderUnavailable,
+            format!("cannot read FathomExportAnalysis.java: {e}"),
+        )
+    })?;
+    Ok(sha256_hex(&bytes))
+}
+
 /// Run (or reuse) the export for one subject and mode.
 pub fn run_export(
     config: &Config,
@@ -123,10 +139,16 @@ pub fn run_export(
             format!("cannot create Ghidra cache dir: {e}"),
         )
     })?;
+    // The cache key binds the export to the script that wrote it: a
+    // changed script (new sections, new semantics) means a fresh
+    // export, never a stale document under the same name.
+    let script_dir = locate_script_dir()?;
+    let script_key = script_digest(&script_dir)?;
     let mode_key = match target {
         Some(name) => format!("{mode}-{}", &sha256_hex(name.as_bytes())[..12]),
         None => mode.to_string(),
     };
+    let mode_key = format!("{mode_key}-s{}", &script_key[..12]);
     let export_file = cache_dir.join(format!("export-{mode_key}.json"));
     if export_file.exists() {
         return read_export(&export_file);
@@ -138,7 +160,6 @@ pub fn run_export(
         )
         .with_remediation("Install Ghidra 12 or set ghidra_headless / FATHOM_GHIDRA_HEADLESS.")
     })?;
-    let script_dir = locate_script_dir()?;
     let export_dir = cache_dir.join(format!("out-{mode_key}"));
     fs::create_dir_all(&export_dir).map_err(|e| {
         FathomError::new(
@@ -303,7 +324,18 @@ fn read_export(path: &Path) -> Result<Export, FathomError> {
     parse_export(&bytes)
 }
 
-fn parse_export(bytes: &[u8]) -> Result<Export, FathomError> {
+/// Lowercase hex of a query's UTF-8 bytes. The read-core modes
+/// receive their query this way so no query can begin with '-'
+/// and be parsed by analyzeHeadless as one of its own options.
+pub fn hex_query(query: &str) -> String {
+    let mut out = String::with_capacity(query.len() * 2);
+    for byte in query.as_bytes() {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+pub(crate) fn parse_export(bytes: &[u8]) -> Result<Export, FathomError> {
     serde_json::from_slice(bytes).map_err(|e| {
         FathomError::new(
             ErrorCode::EvidenceIntegrityMismatch,
@@ -317,9 +349,15 @@ fn parse_export(bytes: &[u8]) -> Result<Export, FathomError> {
 #[derive(Debug, Deserialize)]
 pub struct Export {
     #[serde(default)]
+    pub addresses: Option<Vec<AddressFacts>>,
+    #[serde(default)]
+    pub byte_search: Option<ByteSearch>,
+    #[serde(default)]
     pub callees: Option<Vec<String>>,
     #[serde(default)]
     pub callers: Option<Vec<String>>,
+    #[serde(default)]
+    pub callgraph: Option<CallGraph>,
     #[serde(default)]
     pub data_strings: Vec<StringInfo>,
     #[serde(default)]
@@ -330,6 +368,12 @@ pub struct Export {
     pub data_strings_truncated: bool,
     #[serde(default)]
     pub decompile: Option<Decompile>,
+    #[serde(default)]
+    pub decompiles: Option<Vec<DecompileRow>>,
+    #[serde(default)]
+    pub detail: Option<Detail>,
+    #[serde(default)]
+    pub disassembly: Option<Disassembly>,
     #[serde(default)]
     pub function: Option<FunctionInfo>,
     #[serde(default)]
@@ -347,12 +391,20 @@ pub struct Export {
     #[serde(default)]
     pub functions_truncated: bool,
     #[serde(default)]
+    pub instruction_search: Option<InstructionSearch>,
+    #[serde(default)]
     pub listing: Vec<ListingRow>,
     #[serde(default)]
     pub listing_truncated: bool,
     #[serde(default)]
     pub memory_blocks: Vec<MemoryBlock>,
+    #[serde(default)]
+    pub mode: Option<String>,
     pub program: ProgramInfo,
+    #[serde(default)]
+    pub program_facts: Option<ProgramFacts>,
+    #[serde(default)]
+    pub query_error: Option<String>,
     #[serde(default)]
     pub references_to: Vec<RefInfo>,
     #[serde(default)]
@@ -367,6 +419,8 @@ pub struct Export {
     pub symbols_total: usize,
     #[serde(default)]
     pub symbols_truncated: bool,
+    #[serde(default)]
+    pub types: Option<Types>,
 }
 
 #[derive(Debug, Deserialize)]

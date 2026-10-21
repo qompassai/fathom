@@ -4,6 +4,10 @@
 //! bound hit is a `resource_constraint` error or a reported
 //! truncation in the evidence — never an unbounded retry.
 
+/// Addresses answered by one per-address Ghidra query (mirrors the
+/// export script's ADDRESS_QUERY_MAX).
+pub const ADDRESS_QUERY_COUNT_MAX: usize = 32;
+
 /// Canonical bytes of one retained archive census document
 /// (readers SPEC §2.5).
 pub const ARCHIVE_EXPORT_BYTES_MAX: usize = 33_554_432;
@@ -23,11 +27,32 @@ pub const BEAM_ATOMS_MAX: usize = 20_000;
 /// retained from one BEAM module (S6).
 pub const BEAM_FUNCTIONS_MAX: usize = 20_000;
 
+/// Bytes in one byte-search pattern, wildcards included.
+pub const BYTE_PATTERN_BYTES_MAX: usize = 64;
+
+/// Patterns in one byte search (mirrors BYTE_PATTERN_MAX).
+pub const BYTE_PATTERN_COUNT_MAX: usize = 32;
+
+/// Hops walked from one function in a call-graph neighborhood or
+/// an API call-chain search.
+pub const CALL_GRAPH_DEPTH_MAX: usize = 8;
+
+/// Functions decompiled by one batch (mirrors DECOMPILE_BATCH_MAX).
+pub const DECOMPILE_BATCH_COUNT_MAX: usize = 8;
+
 /// Bytes of decompiled output retained per function dossier.
 pub const DECOMPILE_BYTES_MAX: usize = 1_048_576;
 
+/// Bytes decoded by one read-only disassembly request (mirrors
+/// DISASSEMBLE_BYTES_MAX).
+pub const DISASSEMBLE_BYTES_MAX: usize = 4_096;
+
 /// Files inventoried under one directory target.
 pub const FILE_COUNT_MAX: usize = 100_000;
+
+/// Functions examined by one multi-function field-usage query
+/// (each is its own Ghidra run).
+pub const FIELD_USAGE_FUNCTION_COUNT_MAX: usize = 4;
 
 /// Functions retained from one program inventory.
 pub const FUNCTION_COUNT_MAX: usize = 5_000;
@@ -52,6 +77,9 @@ pub const GPU_KERNELS_MAX: usize = 5_000;
 
 /// Listing instructions retained in one function dossier.
 pub const INSTRUCTION_COUNT_MAX: usize = 2_000;
+
+/// Rows one paged listing returns at most (`limit` ceiling).
+pub const LIST_PAGE_ROWS_MAX: usize = 5_000;
 
 /// Bytes captured from one child-process stream.
 pub const OUTPUT_BYTES_MAX: usize = 8_388_608;
@@ -107,6 +135,10 @@ pub const PYINSTALLER_ENTRIES_MAX: usize = 100_000;
 
 /// Module rows retained from one PyInstaller PYZ archive (S5).
 pub const PYZ_MODULES_MAX: usize = 100_000;
+
+/// Bytes in one free-text query argument (names, type strings,
+/// prototypes, search terms, numbers).
+pub const QUERY_TEXT_BYTES_MAX: usize = 512;
 
 /// Decoded segment rows in one Ren'Py RPA index (readers SPEC §2.3).
 pub const RPA_ENTRIES_MAX: usize = 100_000;
