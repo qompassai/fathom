@@ -11,6 +11,7 @@
 pub mod artifact;
 pub mod engine;
 pub mod ghidra;
+pub mod il2cpp;
 pub mod layout;
 
 pub use engine::locate_headless;
@@ -70,6 +71,70 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(layout::inspect_binary_layout),
+    );
+    registry.register(
+        descriptor(
+            "il2cpp_apply",
+            ToolClass::Execute,
+            "ghidra-il2cpp",
+            "Apply a script.json method/string map to a Ghidra project (headless, idempotent)",
+            json!({
+                "type": "object",
+                "properties": {
+                    "map": {"type": "string"},
+                    "program": {"type": "string"},
+                    "project": {"type": "string"},
+                    "project_name": {"type": "string"},
+                },
+                "required": ["map", "project", "project_name"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(il2cpp::il2cpp_apply),
+    );
+    registry.register(
+        descriptor(
+            "il2cpp_decompile",
+            ToolClass::Read,
+            "ghidra-il2cpp",
+            "Decompile one IL2CPP method (by name or 0x RVA) with depth-1 callees",
+            json!({
+                "type": "object",
+                "properties": {
+                    "game_namespaces": {"type": "array", "items": {"type": "string"}},
+                    "map": {"type": "string"},
+                    "method": {"type": "string"},
+                    "program": {"type": "string"},
+                    "project": {"type": "string"},
+                    "project_name": {"type": "string"},
+                },
+                "required": ["method", "project", "project_name"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(il2cpp::il2cpp_decompile),
+    );
+    registry.register(
+        descriptor(
+            "il2cpp_xrefs",
+            ToolClass::Read,
+            "ghidra-il2cpp",
+            "Reference census for IL2CPP addresses, callers grouped and namespace-classified",
+            json!({
+                "type": "object",
+                "properties": {
+                    "game_namespaces": {"type": "array", "items": {"type": "string"}},
+                    "map": {"type": "string"},
+                    "program": {"type": "string"},
+                    "project": {"type": "string"},
+                    "project_name": {"type": "string"},
+                    "targets": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["project", "project_name", "targets"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(il2cpp::il2cpp_xrefs),
     );
     registry.register(
         descriptor(
