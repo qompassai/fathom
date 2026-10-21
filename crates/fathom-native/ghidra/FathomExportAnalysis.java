@@ -1040,7 +1040,9 @@ public class FathomExportAnalysis extends GhidraScript {
             .raw("function", functionJson(fn))
             .str("plate_comment", fn.getComment() == null ? ""
                 : fn.getComment().substring(0, Math.min(fn.getComment().length(),
-                    COMMENT_CHARS_MAX)));
+                    COMMENT_CHARS_MAX)))
+            .bool("plate_comment_truncated",
+                fn.getComment() != null && fn.getComment().length() > COMMENT_CHARS_MAX);
 
         Rows parameters = new Rows(ROW_MAX, SECTION_BYTES_TINY);
         for (Parameter parameter : fn.getParameters()) {

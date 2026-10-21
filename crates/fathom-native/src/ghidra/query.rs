@@ -471,6 +471,57 @@ pub(crate) mod tests {
         export
     }
 
+    /// A `program`-mode export: every section empty except the
+    /// `(name, json)` overrides given.
+    pub(crate) fn program_facts(overrides: &[(&str, &str)]) -> Export {
+        const EMPTY: &str = r#"{"rows": [], "total": 0, "truncated": false}"#;
+        let mut sections: Vec<(String, String)> = [
+            "analyzers",
+            "bookmarks",
+            "class_members",
+            "code_gaps",
+            "comments",
+            "data_items",
+            "entry_points",
+            "external_locations",
+            "function_docs",
+            "function_tags",
+            "namespaces",
+            "option_groups",
+            "options",
+            "properties",
+            "property_maps",
+        ]
+        .iter()
+        .map(|name| (name.to_string(), EMPTY.to_string()))
+        .collect();
+        sections.push((
+            "analysis".into(),
+            r#"{"analyzed": true, "analyzed_option_present": true}"#.into(),
+        ));
+        sections.push(("calling_conventions".into(), "[]".into()));
+        sections.push((
+            "project".into(),
+            format!(
+                r#"{{"available": true, "name": "fathom", "program_path": "/sample",
+                "files": {EMPTY}, "folders": {EMPTY}}}"#
+            ),
+        ));
+        for (name, json) in overrides {
+            if let Some(slot) = sections.iter_mut().find(|(n, _)| n == name) {
+                slot.1 = json.to_string();
+            }
+        }
+        let body: Vec<String> = sections
+            .iter()
+            .map(|(name, json)| format!("\"{name}\": {json}"))
+            .collect();
+        export(
+            "program",
+            &format!("\"program_facts\": {{{}}}", body.join(", ")),
+        )
+    }
+
     #[test]
     fn adversarial_address_overflow_and_garbage_are_refused() {
         for bad in [

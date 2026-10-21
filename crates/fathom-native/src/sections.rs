@@ -354,6 +354,8 @@ pub struct Detail {
     pub pcode_ops_total: u64,
     #[serde(default)]
     pub plate_comment: String,
+    #[serde(default)]
+    pub plate_comment_truncated: bool,
     pub query: String,
     #[serde(default)]
     pub references_to: Option<Bounded<RefTo>>,

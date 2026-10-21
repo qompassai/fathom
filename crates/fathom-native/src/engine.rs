@@ -17,7 +17,6 @@ use fathom_core::evidence::sha256_hex;
 use fathom_core::limits::{
     GHIDRA_FIRST_IMPORT_TIMEOUT_SECS, GHIDRA_TIMEOUT_SECS, OUTPUT_BYTES_MAX,
 };
-use fathom_core::paths;
 use fathom_core::process::{ProcessSpec, run};
 
 use crate::sections::{
@@ -60,7 +59,7 @@ pub fn locate_headless(config: &Config) -> Option<PathBuf> {
 /// Directory holding `FathomExportAnalysis.java`: the
 /// `FATHOM_GHIDRA_SCRIPT_DIR` override, else the crate's bundled
 /// `ghidra/` directory (in-repo and dev builds).
-fn locate_script_dir() -> Result<PathBuf, FathomError> {
+pub(crate) fn locate_script_dir() -> Result<PathBuf, FathomError> {
     if let Ok(dir) = std::env::var("FATHOM_GHIDRA_SCRIPT_DIR") {
         let candidate = PathBuf::from(dir);
         if candidate.join("FathomExportAnalysis.java").exists() {
@@ -75,6 +74,15 @@ fn locate_script_dir() -> Result<PathBuf, FathomError> {
         ErrorCode::ProviderUnavailable,
         "FathomExportAnalysis.java not found (set FATHOM_GHIDRA_SCRIPT_DIR)",
     ))
+}
+
+/// The per-subject cache directory (not created): where the
+/// project and every cached export for `subject_sha256` live.
+pub fn cache_dir_for(config: &Config, subject_sha256: &str) -> PathBuf {
+    config
+        .state_dir
+        .join("ghidra")
+        .join(&subject_sha256[..subject_sha256.len().min(32)])
 }
 
 /// The first element of `path` that Ghidra's project locator
@@ -131,8 +139,7 @@ pub fn run_export(
     mode: &str,
     target: Option<&str>,
 ) -> Result<Export, FathomError> {
-    let cache_dir = paths::state_subdir(config, "ghidra")?
-        .join(&subject_sha256[..subject_sha256.len().min(32)]);
+    let cache_dir = cache_dir_for(config, subject_sha256);
     fs::create_dir_all(&cache_dir).map_err(|e| {
         FathomError::new(
             ErrorCode::ExecutionFailure,

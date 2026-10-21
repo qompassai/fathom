@@ -104,6 +104,16 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "analysis_status",
+            ToolClass::Read,
+            "ghidra",
+            "Whether the cached program is auto-analyzed, and analyzer enablement counts",
+            target_schema(),
+        ),
+        Arc::new(ghidra::program::analysis_status),
+    );
+    registry.register(
+        descriptor(
             "analyze_function",
             ToolClass::Read,
             "ghidra",
@@ -159,6 +169,23 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "get_comment",
+            ToolClass::Read,
+            "ghidra",
+            "Stored comments at one address, optionally of one type",
+            target_and(
+                json!({
+                    "address": {"type": "string"},
+                    "type": {"type": "string",
+                        "enum": ["eol", "plate", "post", "pre", "repeatable"]},
+                }),
+                &["address"],
+            ),
+        ),
+        Arc::new(ghidra::program::get_comment),
+    );
+    registry.register(
+        descriptor(
             "get_data_type_size",
             ToolClass::Read,
             "ghidra",
@@ -169,6 +196,16 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "get_entry_points",
+            ToolClass::Read,
+            "ghidra",
+            "External entry points (exports and the program entry; paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::get_entry_points),
+    );
+    registry.register(
+        descriptor(
             "get_enum_values",
             ToolClass::Read,
             "ghidra",
@@ -176,6 +213,19 @@ pub fn register(registry: &mut Registry) {
             target_and(json!({"name": {"type": "string"}}), &["name"]),
         ),
         Arc::new(ghidra::types::get_enum_values),
+    );
+    registry.register(
+        descriptor(
+            "get_external_location",
+            ToolClass::Read,
+            "ghidra",
+            "External (imported) locations matching one name or address",
+            target_and(
+                json!({"address": {"type": "string"}, "name": {"type": "string"}}),
+                &[],
+            ),
+        ),
+        Arc::new(ghidra::program::get_external_location),
     );
     registry.register(
         descriptor(
@@ -270,6 +320,52 @@ pub fn register(registry: &mut Registry) {
             target_and(json!({"function": {"type": "string"}}), &["function"]),
         ),
         Arc::new(ghidra::xrefs::get_function_xrefs),
+    );
+    registry.register(
+        descriptor(
+            "get_plate_comment",
+            ToolClass::Read,
+            "ghidra",
+            "Stored plate comment at an address or a function's entry",
+            target_and(
+                json!({"address": {"type": "string"}, "function": {"type": "string"}}),
+                &[],
+            ),
+        ),
+        Arc::new(ghidra::program::get_plate_comment),
+    );
+    registry.register(
+        descriptor(
+            "get_program_options",
+            ToolClass::Read,
+            "ghidra",
+            "Program options with types and values, optionally one group (paged)",
+            target_and(with_page(json!({"group": {"type": "string"}})), &[]),
+        ),
+        Arc::new(ghidra::program::get_program_options),
+    );
+    registry.register(
+        descriptor(
+            "get_project_info",
+            ToolClass::Read,
+            "ghidra",
+            "Fathom's cached Ghidra project for the target, read from the state dir",
+            target_schema(),
+        ),
+        Arc::new(ghidra::program::get_project_info),
+    );
+    registry.register(
+        descriptor(
+            "get_property",
+            ToolClass::Read,
+            "ghidra",
+            "Value of one user property map at one address",
+            target_and(
+                json!({"address": {"type": "string"}, "map": {"type": "string"}}),
+                &["address", "map"],
+            ),
+        ),
+        Arc::new(ghidra::program::get_property),
     );
     registry.register(
         descriptor(
@@ -506,6 +602,82 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "list_analyzers",
+            ToolClass::Read,
+            "ghidra",
+            "Auto-analysis analyzers recorded in the program, with enablement (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_analyzers),
+    );
+    registry.register(
+        descriptor(
+            "list_bookmarks",
+            ToolClass::Read,
+            "ghidra",
+            "Bookmarks, optionally filtered by type or category (paged)",
+            target_and(
+                with_page(json!({
+                    "category": {"type": "string"},
+                    "type": {"type": "string"},
+                })),
+                &[],
+            ),
+        ),
+        Arc::new(ghidra::program::list_bookmarks),
+    );
+    registry.register(
+        descriptor(
+            "list_calling_conventions",
+            ToolClass::Read,
+            "ghidra",
+            "Calling conventions the program's compiler spec defines",
+            target_schema(),
+        ),
+        Arc::new(ghidra::program::list_calling_conventions),
+    );
+    registry.register(
+        descriptor(
+            "list_class_members",
+            ToolClass::Read,
+            "ghidra",
+            "Symbols inside one class namespace (paged)",
+            target_and(with_page(json!({"class": {"type": "string"}})), &["class"]),
+        ),
+        Arc::new(ghidra::program::list_class_members),
+    );
+    registry.register(
+        descriptor(
+            "list_classes",
+            ToolClass::Read,
+            "ghidra",
+            "Class namespaces with member counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_classes),
+    );
+    registry.register(
+        descriptor(
+            "list_data_items",
+            ToolClass::Read,
+            "ghidra",
+            "Defined data items with types, values, and reference counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_data_items),
+    );
+    registry.register(
+        descriptor(
+            "list_data_items_by_xrefs",
+            ToolClass::Read,
+            "ghidra",
+            "Defined data items ranked by references to them (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_data_items_by_xrefs),
+    );
+    registry.register(
+        descriptor(
             "list_data_type_categories",
             ToolClass::Read,
             "ghidra",
@@ -531,6 +703,16 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::types::list_data_types),
+    );
+    registry.register(
+        descriptor(
+            "list_external_locations",
+            ToolClass::Read,
+            "ghidra",
+            "External (imported) locations, optionally one library (paged)",
+            target_and(with_page(json!({"library": {"type": "string"}})), &[]),
+        ),
+        Arc::new(ghidra::program::list_external_locations),
     );
     registry.register(
         descriptor(
@@ -566,6 +748,91 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "list_namespaces",
+            ToolClass::Read,
+            "ghidra",
+            "Namespace, class, and library symbols with member counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_namespaces),
+    );
+    registry.register_not_implemented(
+        descriptor(
+            "list_open_programs",
+            ToolClass::Read,
+            "ghidra",
+            "Open programs — not implemented: fathom is stateless per call and holds no \
+             open-program session (SPEC §4); see list_projects",
+            json!({"type": "object", "properties": {}, "additionalProperties": false}),
+        ),
+        "§4 (stateless per-call tools; session binding not implemented)",
+    );
+    registry.register(
+        descriptor(
+            "list_option_groups",
+            ToolClass::Read,
+            "ghidra",
+            "Program option groups with option counts (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_option_groups),
+    );
+    registry.register(
+        descriptor(
+            "list_project_files",
+            ToolClass::Read,
+            "ghidra",
+            "Domain files in the target's cached Ghidra project (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_project_files),
+    );
+    registry.register(
+        descriptor(
+            "list_projects",
+            ToolClass::Read,
+            "ghidra",
+            "Fathom's per-subject Ghidra project caches in the state dir (paged)",
+            json!({
+                "type": "object",
+                "properties": ghidra::query::page_properties(),
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(ghidra::program::list_projects),
+    );
+    registry.register(
+        descriptor(
+            "list_properties",
+            ToolClass::Read,
+            "ghidra",
+            "User property map entries, optionally one map (paged)",
+            target_and(with_page(json!({"map": {"type": "string"}})), &[]),
+        ),
+        Arc::new(ghidra::program::list_properties),
+    );
+    registry.register(
+        descriptor(
+            "list_property_maps",
+            ToolClass::Read,
+            "ghidra",
+            "User property maps with value classes and sizes (paged)",
+            target_and(with_page(json!({})), &[]),
+        ),
+        Arc::new(ghidra::program::list_property_maps),
+    );
+    registry.register(
+        descriptor(
+            "list_scripts",
+            ToolClass::Read,
+            "ghidra",
+            "Scripts in fathom's provider script dir, with digests",
+            fathom_core::registry::empty_schema(),
+        ),
+        Arc::new(ghidra::program::list_scripts),
+    );
+    registry.register(
+        descriptor(
             "list_strings",
             ToolClass::Read,
             "ghidra",
@@ -574,6 +841,16 @@ pub fn register(registry: &mut Registry) {
             inventory_schema(),
         ),
         Arc::new(ghidra::list_strings),
+    );
+    registry.register(
+        descriptor(
+            "project_info",
+            ToolClass::Read,
+            "ghidra",
+            "The target's cached Ghidra project as Ghidra reports it",
+            target_schema(),
+        ),
+        Arc::new(ghidra::program::project_info),
     );
     registry.register_not_implemented(
         descriptor(
