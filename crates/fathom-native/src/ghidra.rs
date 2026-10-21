@@ -15,6 +15,7 @@ use fathom_core::registry::{Registry, require_str};
 
 use crate::engine::{self, Export, FunctionInfo};
 
+pub mod detection;
 pub mod functions;
 pub mod program;
 pub(crate) mod query;

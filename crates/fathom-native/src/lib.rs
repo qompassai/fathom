@@ -163,6 +163,26 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "detect_crypto_constants",
+            ToolClass::Read,
+            "ghidra",
+            "Known cryptographic constant tables in initialized memory (algorithm inferred)",
+            target_schema(),
+        ),
+        Arc::new(ghidra::detection::detect_crypto_constants),
+    );
+    registry.register(
+        descriptor(
+            "detect_malware_behaviors",
+            ToolClass::Read,
+            "ghidra",
+            "Capability indicators from imports and strings (inferred; not a verdict)",
+            target_schema(),
+        ),
+        Arc::new(ghidra::detection::detect_malware_behaviors),
+    );
+    registry.register(
+        descriptor(
             "disassemble_bytes",
             ToolClass::Read,
             "ghidra",
@@ -177,6 +197,27 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::search::disassemble_bytes),
+    );
+    registry.register(
+        descriptor(
+            "extract_iocs_with_context",
+            ToolClass::Read,
+            "ghidra",
+            "URLs, IPs, domains, emails, registry keys, and paths in strings, with \
+             referencing functions",
+            target_schema(),
+        ),
+        Arc::new(ghidra::detection::extract_iocs_with_context),
+    );
+    registry.register(
+        descriptor(
+            "find_anti_analysis_techniques",
+            ToolClass::Read,
+            "ghidra",
+            "Anti-debug, anti-VM, and timing indicators from imports, instructions, strings",
+            target_schema(),
+        ),
+        Arc::new(ghidra::detection::find_anti_analysis_techniques),
     );
     registry.register(
         descriptor(

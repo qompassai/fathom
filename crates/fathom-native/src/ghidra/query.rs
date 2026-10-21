@@ -353,6 +353,20 @@ fn decide<'a, T>(matches: Vec<&'a T>, via: &'static str) -> Option<Resolved<'a, 
     }
 }
 
+/// A tool that combines several engine runs must have analyzed the
+/// same bytes in each: every run re-hashes the target, so a digest
+/// change between runs is mid-run mutation (SPEC §9.1).
+pub(crate) fn same_subject(first: &Subject, later: &Subject) -> Result<(), FathomError> {
+    if first.sha256 != later.sha256 {
+        return Err(FathomError::new(
+            ErrorCode::ArtifactChanged,
+            "the target changed between engine runs of one call; results discarded",
+        )
+        .with_target(first.path.clone()));
+    }
+    Ok(())
+}
+
 /// The per-function detail section, or `None` after recording why
 /// the function query did not resolve.
 pub(crate) fn found_detail<'a>(
