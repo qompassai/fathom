@@ -1,13 +1,13 @@
 ---
 name: "tiger-style-rust"
-description: "Write or review Rust code in Matt's Tiger Style: safety-first Rust standard with explicit contracts, assertions, bounded work, and disciplined ownership. Use when writing, regenerating, refactoring, or reviewing Rust — especially services, CLI tools, the phlow agent runtime, and Neovim helpers. See references/TIGER_STYLE_RUST.md for the full guide."
+description: "Write or review Rust code in Owner's Tiger Style: safety-first Rust standard with explicit contracts, assertions, bounded work, and disciplined ownership. Use when writing, regenerating, refactoring, or reviewing Rust — especially services, CLI tools, the phlow agent runtime, and Neovim helpers. See references/TIGER_STYLE_RUST.md for the full guide."
 ---
 
 # Tiger Style Rust
 
 ## Purpose
 
-Apply Matt's Tiger Style standard to Rust code. Priority order, always:
+Apply Owner's Tiger Style standard to Rust code. Priority order, always:
 **Safety > Performance > Developer Experience.** The full guide lives in
 [references/TIGER_STYLE_RUST.md](references/TIGER_STYLE_RUST.md); this file
 is the operational core. When the two disagree, the full guide wins.
@@ -99,7 +99,7 @@ is the operational core. When the two disagree, the full guide wins.
 
 ## Output Contract
 
-Rust you produce for Matt must: compile on the pinned nightly with
+Rust you produce for Owner must: compile on the pinned nightly with
 warnings denied, carry doc comments on public items stating contract
 and bounds, return typed errors on expected failures, assert internal
 invariants, bound all work/queues/retries/memory, stay within 100
