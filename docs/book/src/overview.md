@@ -6,7 +6,7 @@ over MCP (stdio and streamable HTTP) and advertises them with a
 signed A2A agent card.
 
 Design source: [morluto/rea](https://github.com/morluto/rea) (MIT),
-via Matt's fork `qompassai/rea`. No upstream TypeScript is copied;
+via Owner's fork `qompassai/rea`. No upstream TypeScript is copied;
 the contracts, tool catalog, and evidence model are reimplemented
 from the fork's public documentation. The full contract lives in
 the repository's `SPEC.md`; this book is the operator's tour.
@@ -14,7 +14,7 @@ the repository's `SPEC.md`; this book is the operator's tour.
 <details>
 <summary>Why a Rust port</summary>
 
-Matt's reasoning, recorded 2026-10-10: given the shifting
+Owner's reasoning, recorded 2026-10-10: given the shifting
 security-vulnerability landscape (Node/npm supply-chain risk) and
 his Rust-first stack, whole Rust ports of tools he depends on are
 prioritized proactively rather than as reactionary ports later —

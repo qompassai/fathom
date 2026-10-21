@@ -6,7 +6,7 @@
 contracts (tool catalog, tool-design guide, error schema,
 provider guides). No upstream code copied or transliterated.
 
-**Rationale** (Matt): the Node/npm supply chain is a shifting
+**Rationale** (Owner): the Node/npm supply chain is a shifting
 vulnerability surface; the estate is Rust-first; whole ports are
 prioritized proactively, not reactionary. Upstream is MIT, so this
 is a supply-chain and coherence choice, not a licensing need.
@@ -37,7 +37,7 @@ volta/vongola) rather than depending on `rmcp`, `a2a`, or
 
 ## Name the port plainly (2026-10-12)
 
-**Decision** (Matt): fathom is described as a Rust port of REA —
+**Decision** (Owner): fathom is described as a Rust port of REA —
 nothing more. A two-word methodological descriptor that earlier
 project text carried was removed from every project-facing
 surface (NOTICE, README, SPEC, book overview, crate docs,

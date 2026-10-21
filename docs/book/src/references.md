@@ -1,7 +1,7 @@
 # References
 
 External references collected for this port's research. The
-mashup-sources list below is Matt's link collection (from his
+mashup-sources list below is Owner's link collection (from his
 "video game mashup sources" document, added 2026-10-10),
 preserved in document order: decompilation projects and
 write-ups, game-modding and mashup work, asset sources, and
