@@ -152,6 +152,7 @@ pub fn session_info(config: &Config, registry: &Registry) -> Value {
     json!({
         "product": crate::PRODUCT_NAME,
         "version": crate::VERSION,
+        "source_revision": crate::SOURCE_REVISION,
         "catalog_digest": registry.catalog_digest(),
         "tools_total": descriptors.len(),
         "tools_available": available,
@@ -282,6 +283,16 @@ mod tests {
             .call(&config(&[]), "session_info", &json!({}))
             .unwrap();
         assert_eq!(value["ok"], true);
+    }
+
+    #[test]
+    fn validation_session_info_reports_the_embedded_source_revision() {
+        // Q3 (D-092): the build-time source revision is part of
+        // the producer identity session_info reports.
+        let registry = Registry::new();
+        let info = session_info(&config(&[]), &registry);
+        assert_eq!(info["source_revision"], crate::SOURCE_REVISION);
+        assert!(!crate::SOURCE_REVISION.is_empty());
     }
 
     #[test]

@@ -14,10 +14,18 @@ pub mod limits;
 pub mod paths;
 pub mod policy;
 pub mod process;
+pub mod proof;
 pub mod registry;
 
 /// The port's version, from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The source revision this build was compiled from (SPEC
+/// §4.1.5): the git HEAD at build time, suffixed `-dirty` when
+/// the tree carried uncommitted changes, or `"unknown"` when
+/// built outside a checkout. Embedded by `build.rs`; part of
+/// the producer identity `session_info` reports.
+pub const SOURCE_REVISION: &str = env!("FATHOM_SOURCE_REVISION");
 
 /// The port's product name, used in protocol surfaces.
 pub const PRODUCT_NAME: &str = "fathom";

@@ -35,6 +35,27 @@ pub const PROCESS_OUTPUT_BYTES_MAX: usize = 1_048_576;
 /// Default wall-clock bound for one `capture_process` run, seconds.
 pub const PROCESS_TIMEOUT_SECS: u64 = 60;
 
+/// Serialized bytes of one reconstruction proof, stored or
+/// inline (SPEC §4.1.9).
+pub const PROOF_BYTES_MAX: usize = 1_048_576;
+
+/// Claims in one reconstruction proof (SPEC §4.1.9).
+pub const PROOF_CLAIMS_MAX: usize = 256;
+
+/// Characters of one per-claim verification diagnostic
+/// (SPEC §4.1.9).
+pub const PROOF_DIAGNOSTIC_CHARS_MAX: usize = 512;
+
+/// Evidence references bound to one claim (SPEC §4.1.9).
+pub const PROOF_EVIDENCE_PER_CLAIM_MAX: usize = 32;
+
+/// Proofs stored for one subject; a build past the cap is
+/// refused, never a silent eviction (SPEC §4.1.9).
+pub const PROOF_PER_SUBJECT_MAX: usize = 64;
+
+/// Canonical bytes of one claim's statement facts (SPEC §4.1.9).
+pub const PROOF_STATEMENT_BYTES_MAX: usize = 16_384;
+
 /// Strings retained from one program inventory.
 pub const STRING_COUNT_MAX: usize = 5_000;
 
