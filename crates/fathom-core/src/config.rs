@@ -158,18 +158,18 @@ impl Config {
 /// `$XDG_STATE_HOME/fathom`, else `$HOME/.local/state/fathom`,
 /// else a temp-dir fallback that is always writable.
 pub fn default_state_dir() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("fathom");
-        }
+    if let Ok(xdg) = std::env::var("XDG_STATE_HOME")
+        && !xdg.is_empty()
+    {
+        return PathBuf::from(xdg).join("fathom");
     }
-    if let Ok(home) = std::env::var("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home)
-                .join(".local")
-                .join("state")
-                .join("fathom");
-        }
+    if let Ok(home) = std::env::var("HOME")
+        && !home.is_empty()
+    {
+        return PathBuf::from(home)
+            .join(".local")
+            .join("state")
+            .join("fathom");
     }
     std::env::temp_dir().join("fathom-state")
 }
