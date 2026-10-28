@@ -20,7 +20,7 @@ repo:
 - **Fathom's tool tiers** — SPEC classes mapped to tiers: `read`
   tools run; `observe_browser` needs the human at this layer too,
   mirroring SPEC §8 (the engine default-denies observe/execute
-  without a config allowlist — Matt's ruling 2026-10-10);
+  without a config allowlist — Owner's ruling 2026-10-10);
   `capture_process`,
   the catalog's only `execute` tool, is a hard deny — its SPEC
   default-deny preserved in policy form. The upstream
@@ -69,7 +69,7 @@ sink spoofing.
 
 ## Changing this policy
 
-Policy changes are **proposal → replay → Matt's approval**: no
+Policy changes are **proposal → replay → Owner's approval**: no
 worker widens its own policy. A change lands with its replay
 scenarios updated in the same commit, gates green, and the approval
 recorded in `.ai/memory/`.

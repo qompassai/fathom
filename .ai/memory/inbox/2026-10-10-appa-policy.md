@@ -1,6 +1,6 @@
 # OpenAPPA policy profile added (2026-10-10)
 
-Matt directed the estate's OpenAPPA adaptation — the pilot at
+Owner directed the estate's OpenAPPA adaptation — the pilot at
 `~/openappa-pilot` (appa 0.30.0 @ 5060566a, one image profile) — be
 propagated to vongola, volta, and fathom. Fathom's profile lands in
 `policy/`: battery include plus root rules for this repo's workflows,
@@ -13,4 +13,4 @@ Gates at landing: `appa describe --check` exit 0; `appa replay`
 9/9 files ok (34 steps: 19 allow, 13 deny, 2 authority — workflows,
 hard denies, exfiltration, label confusion, sink spoofing among
 them). Policy changes follow the standing rule: proposal → replay →
-Matt's approval.
+Owner's approval.

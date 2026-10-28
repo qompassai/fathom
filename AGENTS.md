@@ -32,7 +32,7 @@ design contract; this file is the operating discipline.
   `cargo clippy --all-targets -- -D warnings`, `cargo fmt
   --check`, the IDE gate (headless nvim with the live diver
   config), `nix build`, `nix flake check`, and `mdbook build`.
-- Commits are local until Matt authorizes a push. Stage explicit
+- Commits are local until Owner authorizes a push. Stage explicit
   pathspecs; run `git diff --cached --stat` before every commit;
   never sweep foreign changes.
 - Findings and decisions go to `.ai/memory/` (inbox first,

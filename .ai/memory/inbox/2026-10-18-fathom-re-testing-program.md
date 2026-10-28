@@ -1,6 +1,6 @@
 # Fathom RE testing program + phlow integration + art style provider (2026-10-18)
 
-Branch `pax/fathom-re-testing-20261018` (unpushed; landing is Matt's word).
+Branch `pax/fathom-re-testing-20261018` (unpushed; landing is Owner's word).
 Corpus + drivers + results: primo `~/fathom-re-corpus-20261018/`.
 Calibration: primo `~/fathom-art-calibration-20261018/`.
 
