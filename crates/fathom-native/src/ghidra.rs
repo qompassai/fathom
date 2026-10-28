@@ -707,6 +707,7 @@ mod tests {
             signing_key_file: None,
             state_dir,
             target_roots: vec![root.canonicalize().unwrap()],
+            video: fathom_core::config::VideoConfig::default(),
         };
         SeededTarget {
             config,

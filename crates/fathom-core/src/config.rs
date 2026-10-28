@@ -26,12 +26,127 @@ pub struct ConfigFile {
     pub ghidra_headless: Option<PathBuf>,
     /// Bind address for the HTTP transports.
     pub http_bind: Option<String>,
+    /// Per-provider configuration blocks (SPEC §8 pattern:
+    /// a provider exists for a build only when the operator
+    /// configures it).
+    pub providers: Option<ProvidersFile>,
     /// File holding the base64 Ed25519 signing seed (32 bytes).
     pub signing_key_file: Option<PathBuf>,
     /// Directory for all analysis state.
     pub state_dir: Option<PathBuf>,
     /// Roots every target path must canonicalize under.
     pub target_roots: Option<Vec<PathBuf>>,
+}
+
+/// The `[providers]` table of the on-disk form.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvidersFile {
+    /// The YouTube ingest lane's provider block (YouTube-RE
+    /// SPEC §4.3/§4.4: rendition and ASR are configuration,
+    /// never per-call arguments).
+    pub video: Option<VideoProviderFile>,
+}
+
+/// The `[providers.video]` block, on-disk form.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VideoProviderFile {
+    /// Model file the local-ASR program consumes (YouTube-RE
+    /// §4.4 path 3).
+    pub asr_model: Option<PathBuf>,
+    /// Local-ASR engine program (YouTube-RE §5 verdict:
+    /// whisper.cpp via an operator wrapper). Absent means
+    /// the local-ASR leg is unavailable and an ingest with
+    /// no caption track proceeds partial, honestly.
+    pub asr_program: Option<PathBuf>,
+    /// Caption language tried after the video's original
+    /// language (default `en`).
+    pub caption_fallback_language: Option<String>,
+    /// Fetcher program (default `yt-dlp`).
+    pub fetcher_program: Option<PathBuf>,
+    /// Whole format-string override for the fetch template.
+    /// Test-only in spirit: obligation 2's hash reproduction
+    /// runs under the estate corpus's archival string
+    /// (YouTube-RE §14); production policy is `max_height`.
+    pub format_override: Option<String>,
+    /// Rendition cap in lines (default 1080; YouTube-RE
+    /// §4.3 analysis rendition policy).
+    pub max_height: Option<u32>,
+    /// Frame sampler program (default `ffmpeg`).
+    pub sampler_program: Option<PathBuf>,
+}
+
+/// Validated video-lane configuration.
+#[derive(Clone, Debug)]
+pub struct VideoConfig {
+    pub asr_model: Option<PathBuf>,
+    pub asr_program: Option<PathBuf>,
+    pub caption_fallback_language: String,
+    pub fetcher_program: PathBuf,
+    pub format_override: Option<String>,
+    pub max_height: u32,
+    pub sampler_program: PathBuf,
+}
+
+impl Default for VideoConfig {
+    fn default() -> Self {
+        VideoConfig {
+            asr_model: None,
+            asr_program: None,
+            caption_fallback_language: "en".to_string(),
+            fetcher_program: PathBuf::from("yt-dlp"),
+            format_override: None,
+            max_height: 1080,
+            sampler_program: PathBuf::from("ffmpeg"),
+        }
+    }
+}
+
+impl VideoConfig {
+    fn from_file_form(form: VideoProviderFile) -> Result<VideoConfig, FathomError> {
+        let caption_fallback_language = form
+            .caption_fallback_language
+            .unwrap_or_else(|| "en".to_string());
+        if caption_fallback_language.is_empty()
+            || !caption_fallback_language
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return Err(FathomError::new(
+                ErrorCode::ConfigurationInvalid,
+                "providers.video.caption_fallback_language must be a language tag",
+            ));
+        }
+        let max_height = form.max_height.unwrap_or(1080);
+        if max_height == 0 || max_height > 4320 {
+            return Err(FathomError::new(
+                ErrorCode::ConfigurationInvalid,
+                "providers.video.max_height must be within 1..=4320",
+            ));
+        }
+        if let Some(format) = &form.format_override
+            && format.is_empty()
+        {
+            return Err(FathomError::new(
+                ErrorCode::ConfigurationInvalid,
+                "providers.video.format_override must not be empty",
+            ));
+        }
+        Ok(VideoConfig {
+            asr_model: form.asr_model,
+            asr_program: form.asr_program,
+            caption_fallback_language,
+            fetcher_program: form
+                .fetcher_program
+                .unwrap_or_else(|| PathBuf::from("yt-dlp")),
+            format_override: form.format_override,
+            max_height,
+            sampler_program: form
+                .sampler_program
+                .unwrap_or_else(|| PathBuf::from("ffmpeg")),
+        })
+    }
 }
 
 /// Validated runtime configuration.
@@ -44,6 +159,7 @@ pub struct Config {
     pub signing_key_file: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub target_roots: Vec<PathBuf>,
+    pub video: VideoConfig,
 }
 
 impl Config {
@@ -98,6 +214,10 @@ impl Config {
         }
         target_roots.sort();
         target_roots.dedup();
+        let video = match form.providers.and_then(|providers| providers.video) {
+            Some(video_form) => VideoConfig::from_file_form(video_form)?,
+            None => VideoConfig::default(),
+        };
         Ok(Config {
             allow_programs,
             allow_tools,
@@ -106,6 +226,7 @@ impl Config {
             signing_key_file: form.signing_key_file,
             state_dir,
             target_roots,
+            video,
         })
     }
 
@@ -144,6 +265,7 @@ impl Config {
             signing_key_file: None,
             state_dir: default_state_dir(),
             target_roots: Vec::new(),
+            video: VideoConfig::default(),
         }
     }
 

@@ -102,11 +102,25 @@ name = "mcp/fathom/binary_overview"
 delta = {}
 
 [[policy.tool]]
+name = "mcp/fathom/build_video_guide"
+delta = {}
+
+[[policy.tool]]
 name = "mcp/fathom/compare_artifacts"
 delta = {}
 
 [[policy.tool]]
+name = "mcp/fathom/delete_video_ingest"
+requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
 name = "mcp/fathom/export_evidence_bundle"
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/ingest_youtube_video"
+requires = { attention = ["hitl"] }
 delta = {}
 
 [[policy.tool]]
@@ -156,6 +170,10 @@ delta = {}
 [[policy.tool]]
 name = "mcp/fathom/observe_browser"
 requires = { attention = ["hitl"] }
+delta = {}
+
+[[policy.tool]]
+name = "mcp/fathom/read_video_ingest"
 delta = {}
 
 [[policy.tool]]

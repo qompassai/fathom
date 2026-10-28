@@ -129,3 +129,85 @@ pub const UNITY_OBJECTS_MAX: usize = 100_000;
 
 /// Type records retained per SerializedFile (readers SPEC §2.3).
 pub const UNITY_TYPES_MAX: usize = 100_000;
+
+/// Fetched media bytes for one video ingest (YouTube-RE
+/// SPEC §11); checked at pre-flight against format
+/// estimates, refused before download.
+pub const VIDEO_BYTES_MAX: u64 = 8_589_934_592;
+
+/// Chapter records retained per video ingest (YouTube-RE §11).
+pub const VIDEO_CHAPTERS_MAX: usize = 256;
+
+/// Bytes of one crystallization draft document (YouTube-RE
+/// §11); named at Y1 though the drafting tool is Y5.
+pub const VIDEO_DRAFT_BYTES_MAX: usize = 262_144;
+
+/// Video duration admitted to ingest, seconds (YouTube-RE
+/// §11); longer is refused at pre-flight.
+pub const VIDEO_DURATION_SECS_MAX: u64 = 3_600;
+
+/// Wall clock for one fetch child — media, captions, and
+/// info (YouTube-RE §11).
+pub const VIDEO_FETCH_TIMEOUT_SECS: u64 = 900;
+
+/// Bytes of one retained frame PNG (YouTube-RE §11); also
+/// the per-frame return bound in reads.
+pub const VIDEO_FRAME_BYTES_MAX: usize = 8_388_608;
+
+/// Minimum uniform-grid frame sampling interval, seconds
+/// (YouTube-RE §11); the grid leg raises it to fit
+/// `VIDEO_FRAMES_MAX`.
+pub const VIDEO_FRAME_GRID_SECS: u64 = 2;
+
+/// Frames retained per video ingest, both sampling legs
+/// together (YouTube-RE §11).
+pub const VIDEO_FRAMES_MAX: usize = 512;
+
+/// Serialized bytes of one video guide document
+/// (YouTube-RE §11).
+pub const VIDEO_GUIDE_BYTES_MAX: usize = 1_048_576;
+
+/// Steps (including gap and conflict records) in one video
+/// guide (YouTube-RE §11).
+pub const VIDEO_GUIDE_STEPS_MAX: usize = 256;
+
+/// Total guide/spec revision cycles in one run before the
+/// `bound_hit` stop record (YouTube-RE §11).
+pub const VIDEO_ITERATIONS_MAX: u64 = 6;
+
+/// Captured bytes of one `--dump-single-json` metadata
+/// document (YouTube-RE §11, added at the D-184 corpus run:
+/// real metadata for caption-rich videos exceeds the
+/// generic OUTPUT_BYTES_MAX capture cap — the document
+/// enumerates every caption track in every language).
+pub const VIDEO_METADATA_BYTES_MAX: usize = 33_554_432;
+
+/// `consult_phaedrus` rounds per guide/spec document
+/// (YouTube-RE §11); named at Y1 though the loop is Y3.
+pub const VIDEO_RESEARCH_ROUNDS_MAX: u64 = 3;
+
+/// Unknowns consulted (and candidates filed) in one
+/// research round (YouTube-RE §11).
+pub const VIDEO_RESEARCH_UNKNOWNS_PER_ROUND_MAX: usize = 8;
+
+/// Serialized bytes of one clean-room spec document
+/// (YouTube-RE §11); named at Y1 though the tool is Y4.
+pub const VIDEO_SPEC_BYTES_MAX: usize = 1_048_576;
+
+/// Characters of one quoted fragment inside a clean-room
+/// spec's requirements (YouTube-RE §11).
+pub const VIDEO_SPEC_CODE_SPAN_CHARS_MAX: usize = 512;
+
+/// Sections in one clean-room spec version (YouTube-RE §11).
+pub const VIDEO_SPEC_SECTIONS_MAX: usize = 128;
+
+/// Retained versions of one clean-room spec (YouTube-RE
+/// §11); compose past it refuses, never evicts.
+pub const VIDEO_SPEC_VERSIONS_MAX: usize = 32;
+
+/// Bytes of one retained caption track, raw form
+/// (YouTube-RE §11).
+pub const VIDEO_TRANSCRIPT_BYTES_MAX: usize = 4_194_304;
+
+/// Spans retained per video ingest (YouTube-RE §11).
+pub const VIDEO_TRANSCRIPT_SPANS_MAX: usize = 20_000;

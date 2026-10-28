@@ -104,10 +104,13 @@ Tools (alphabetical; status = this run):
 | `apply_style_via_lumen` | execute | art | built (bridge to lumen stdio MCP) |
 | `binary_overview` | read | ghidra | built |
 | `build_reconstruction_obligation_ledger` | read | core | built (§4.1) |
+| `build_video_guide` | read | video | built (YouTube-RE §6 amendment, 2026-10-27) |
 | `capture_process` | execute | process | built (pipes; PTY scaffolded) |
 | `compare_artifacts` | read | core | built |
 | `delete_reconstruction_proof` | execute | core | built (§4.1) |
+| `delete_video_ingest` | execute | video | built (YouTube-RE §4.6 amendment, 2026-10-27) |
 | `export_evidence_bundle` | read | core | built |
+| `ingest_youtube_video` | observe | video | built (YouTube-RE §4 amendment, 2026-10-27) |
 | `inspect_android_apk` | read | android | built (ZIP64 + DEX/arsc decode are named walls) |
 | `inspect_artifact` | read | artifact | built |
 | `inspect_asar` | read | js | built |
@@ -125,6 +128,7 @@ Tools (alphabetical; status = this run):
 | `list_names` | read | ghidra | built |
 | `list_strings` | read | ghidra | built |
 | `observe_browser` | observe | browser | built (Chromium headless DOM inventory) |
+| `read_video_ingest` | read | video | built (YouTube-RE §4.6 amendment, 2026-10-27) |
 | `remap_palette` | execute | art | built |
 | `search_inventory` | read | ghidra | built |
 | `session_info` | read | core | built |
@@ -236,7 +240,7 @@ an imagined client:
 
 ### 4.1.4 Claim model
 
-Seven classes, each grounded in finding kinds fathom
+Eleven classes, each grounded in finding kinds fathom
 already emits and in what phlow's RE runs actually assert. A claim
 class not in this table is refused at parse time (§4.1.7);
 the table grows by SPEC amendment, not by caller invention.
@@ -247,8 +251,12 @@ the table grows by SPEC amendment, not by caller invention.
 | `artifact_classification` | The subject is of format/layout F, with stated properties | `inspect_artifact` / `inspect_binary_layout` findings | `observed` |
 | `call_relationship` | Function A calls / is called by / references B | `call_graph` and `references_to` findings of `analyze_function` | `derived` |
 | `coverage` | The run examined N of M inventory items; the retained inventory is or is not exhaustive, as stated | The envelope `coverage` block and retained-inventory counts of the cited list reads | `observed` |
+| `demonstrated_step` | A procedure step was demonstrated in the stated window of the bound video ingest | `transcript_spans` + `frames` records in the window and a `demonstration_events` record, of the retained `video-ingest` document (YouTube-RE §6.3 amendment, 2026-10-27) | `derived` |
 | `function_identity` | A function exists at address A with the stated name, signature, classification | `function` findings (`binary_overview`, `analyze_function`) | `observed` |
 | `function_purpose` | Function A serves purpose P, stated as structured facts (e.g. callees it orchestrates, strings it consumes, classification it refines) | The dossier spans (listing / decompile) and findings the purpose rests on | `inferred` |
+| `guide_coverage` | The guide examined N of M step records; its coverage is or is not exhaustive, as stated | The guide's coverage block and the bound ingest's inventory counts, via the synthesized `coverage` records of the `video-ingest` document (YouTube-RE §6.3 amendment, 2026-10-27) | `observed` |
+| `on_screen_assertion` | The screen showed the stated content in the stated window of the bound video ingest | `frames` records of the retained `video-ingest` document (YouTube-RE §6.3 amendment, 2026-10-27) | `inferred` |
+| `stated_step` | A procedure step was stated in the stated window of the bound video ingest | `transcript_spans` records of the retained `video-ingest` document (YouTube-RE §6.3 amendment, 2026-10-27) | `observed` |
 | `string_assertion` | A string/data item with stated content exists at a stated location | `list_strings` inventories (defined strings `observed`, data strings `derived`) | as cited |
 
 Rules:
@@ -269,6 +277,15 @@ Rules:
   a reconstruction whose coverage claim is unverified is a
   reconstruction over a partially seen program, and
   §4.1.8's mapping treats that verdict accordingly.
+- **The video classes carry two rules of their own**
+  (YouTube-RE §6.3). A `demonstrated_step`/`stated_step`
+  claim whose window spans a coverage gap recorded in the
+  bound ingest document **fails** (`gap_spanned`); one
+  resting on spans disputed by a retained
+  `transcript_disagreement` record verifies but caps the
+  proof's aggregate at `partial` (`conflict_cap`).
+  `guide_coverage` is gate-critical in the video lane, as
+  `coverage` is in this one.
 - Claims are authored by the caller (phlow's coder, from the
   findings it gathered). The server never invents claim
   statements; it binds, digests, and checks them. Whether
@@ -726,6 +743,9 @@ pinned in `Cargo.lock` and built offline thereafter.
 | NativeAOT (S8) | the PE format + NativeAOT runtime traces | **Screen, honestly labelled.** No ECMA-335 metadata exists to parse: classification is marker-derived (≥2 distinct System.Private.* component strings plus a runtime-helper export or a third component; Derived confidence), with section/export inventories and a dotted-string census. The NativeFormat metadata graph reader is NOT-IMPLEMENTED, gated on a real NativeAOT fixture (no .NET SDK exists on estate machines to produce one). |
 | Process capture | portable-pty (PTY); std::process pipes | **Pipes in this run** (output, exit, timing, hashes). PTY support is scaffolded; upstream's interactive PTY scenarios are named NOT-IMPLEMENTED until portable-pty is adopted. |
 | HAR reading | serde_json over the HAR 1.2 schema | **Implement directly**; no crate needed. |
+| Video fetch | yt-dlp as a library; the platform's internal APIs | **Drive yt-dlp as an owned child** (YouTube-RE, 2026-10-27) under the fixed flag template: `--no-cookies`, `--ignore-config`, scrubbed environment, no credential slot anywhere in the design. Platform metadata is observed evidence, never trusted beyond its statement. |
+| Frame sampling | ffmpeg as a library (ffmpeg-sys FFI); a Rust scene detector | **Drive ffmpeg as an owned child** (YouTube-RE, 2026-10-27): scene + grid legs, PNG extraction, IHDR dimensions read directly. The ffmpeg build is part of the sampler's identity and rides the ingest producer block; no second measurement engine is adopted. |
+| Local ASR (video lane) | faster-whisper (CTranslate2); openai-whisper; Vosk | **whisper.cpp via pywhispercpp over an operator-held ggml model** (YouTube-RE, 2026-10-27, bench on primo): ggml-large-v3-turbo transcribed 300 s of dense tutorial speech in 10.2 s (29× realtime, RTX 4070) at 0.029 rough WER against the platform-ASR track, base.en in 8.6 s at 0.034 (agreement with a machine track, not ground truth). Primo facts: the prebuilt CUDA kernels carry sm_89 only — the wrapper pins CUDA device 1 (the 4070; the A6000's sm_86 aborts) — and LD_LIBRARY_PATH must name the site-packages ggml set (the /usr/lib set is a mismatched 0.26 and registers zero devices). The provider contract is an operator wrapper (argv: model, wav, out-json); segment times are whisper.cpp's 10 ms ticks, verified against synthesized speech at known offsets. |
 | EVM | EVMole as WASM (upstream's route); hand analysis | **Hand analysis** for the dispatcher/selector slice, findings marked `inferred`. Interface reconstruction beyond selectors is scaffolded. |
 | Signing / hashing | ed25519-dalek 2; sha2 0.11 | **Adopt both** (estate-standard crates). |
 | HTTP transport | axum 0.8 on tokio 1 | **Adopt** (estate standard). Stdio transport stays synchronous and tokio-free. |

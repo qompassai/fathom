@@ -21,5 +21,6 @@ fathom-managed = { path = "../fathom-managed" }
 fathom-mcp = { path = "../fathom-mcp" }
 fathom-native = { path = "../fathom-native" }
 fathom-observe = { path = "../fathom-observe" }
+fathom-video = { path = "../fathom-video" }
 serde_json.workspace = true
 tokio.workspace = true

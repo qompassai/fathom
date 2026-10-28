@@ -139,8 +139,12 @@ pub enum ClaimClass {
     ArtifactClassification,
     CallRelationship,
     Coverage,
+    DemonstratedStep,
     FunctionIdentity,
     FunctionPurpose,
+    GuideCoverage,
+    OnScreenAssertion,
+    StatedStep,
     StringAssertion,
 }
 
@@ -151,8 +155,12 @@ impl ClaimClass {
             "artifact_classification" => Some(ClaimClass::ArtifactClassification),
             "call_relationship" => Some(ClaimClass::CallRelationship),
             "coverage" => Some(ClaimClass::Coverage),
+            "demonstrated_step" => Some(ClaimClass::DemonstratedStep),
             "function_identity" => Some(ClaimClass::FunctionIdentity),
             "function_purpose" => Some(ClaimClass::FunctionPurpose),
+            "guide_coverage" => Some(ClaimClass::GuideCoverage),
+            "on_screen_assertion" => Some(ClaimClass::OnScreenAssertion),
+            "stated_step" => Some(ClaimClass::StatedStep),
             "string_assertion" => Some(ClaimClass::StringAssertion),
             _ => None,
         }
@@ -164,8 +172,12 @@ impl ClaimClass {
             ClaimClass::ArtifactClassification => "artifact_classification",
             ClaimClass::CallRelationship => "call_relationship",
             ClaimClass::Coverage => "coverage",
+            ClaimClass::DemonstratedStep => "demonstrated_step",
             ClaimClass::FunctionIdentity => "function_identity",
             ClaimClass::FunctionPurpose => "function_purpose",
+            ClaimClass::GuideCoverage => "guide_coverage",
+            ClaimClass::OnScreenAssertion => "on_screen_assertion",
+            ClaimClass::StatedStep => "stated_step",
             ClaimClass::StringAssertion => "string_assertion",
         }
     }
@@ -180,8 +192,12 @@ impl ClaimClass {
             ClaimClass::ArtifactClassification => Confidence::Observed,
             ClaimClass::CallRelationship => Confidence::Derived,
             ClaimClass::Coverage => Confidence::Observed,
+            ClaimClass::DemonstratedStep => Confidence::Derived,
             ClaimClass::FunctionIdentity => Confidence::Observed,
             ClaimClass::FunctionPurpose => Confidence::Inferred,
+            ClaimClass::GuideCoverage => Confidence::Observed,
+            ClaimClass::OnScreenAssertion => Confidence::Inferred,
+            ClaimClass::StatedStep => Confidence::Observed,
             ClaimClass::StringAssertion => {
                 if inventories.contains(&"data_strings") {
                     Confidence::Derived
@@ -194,9 +210,12 @@ impl ClaimClass {
 
     /// Gate-critical classes (SPEC §4.1.4, D-092 Q2): a
     /// non-verified outcome is named in the verdict block.
-    /// `coverage` alone is gate-critical in v1.
+    /// `coverage` is gate-critical in the §4.1 classes;
+    /// `guide_coverage` is gate-critical in the video lane
+    /// (YouTube-RE SPEC §6.3: it is the class that stops a
+    /// guide from claiming a procedure it only partly saw).
     pub fn gate_critical(self) -> bool {
-        matches!(self, ClaimClass::Coverage)
+        matches!(self, ClaimClass::Coverage | ClaimClass::GuideCoverage)
     }
 }
 
@@ -419,19 +438,22 @@ fn parse_ref(raw: &Value) -> EvidenceRef {
 
 /// Which retained-document family a resolution runs against,
 /// chosen by the proof's export mode: `overview`, a per-function
-/// dossier (`function…`), or an archive census
-/// (`archive_census`, readers SPEC §2.5).
+/// dossier (`function…`), an archive census
+/// (`archive_census`, readers SPEC §2.5), or a video ingest
+/// (`video-ingest`, YouTube-RE SPEC §6.3).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DocKind {
     Archive,
     Dossier,
     Overview,
+    Video,
 }
 
 fn doc_kind(export_mode: &str) -> DocKind {
     match export_mode {
         "archive_census" => DocKind::Archive,
         "overview" => DocKind::Overview,
+        "video-ingest" => DocKind::Video,
         _ => DocKind::Dossier,
     }
 }
@@ -497,6 +519,184 @@ fn resolve_archive(document: &Value, inventory: &str, key: &str) -> Resolution {
     Resolution::NotApplicable
 }
 
+/// The row inventories of a video ingest document and the
+/// record field each is keyed by (YouTube-RE SPEC §4.6/§5.2).
+/// Rows live under the document's `inventories` object, with
+/// `<inventory>_total` and `<inventory>_truncated` siblings,
+/// the archive-census pattern carried into the nested store.
+const VIDEO_ROW_INVENTORIES: [(&str, &str); 5] = [
+    ("coverage_gaps", "gap_key"),
+    ("demonstration_events", "event_key"),
+    ("frames", "frame_key"),
+    ("transcript_disagreements", "disagreement_key"),
+    ("transcript_spans", "span_key"),
+];
+
+/// The inventories a synthesized video `coverage` record can
+/// be derived for: the row inventories above plus `chapters`,
+/// whose rows are keyed by index rather than a key field.
+const VIDEO_COVERAGE_INVENTORIES: [&str; 6] = [
+    "chapters",
+    "coverage_gaps",
+    "demonstration_events",
+    "frames",
+    "transcript_disagreements",
+    "transcript_spans",
+];
+
+fn find_video_rows(inventories: &Value, inventory: &str, key_field: &str, key: &str) -> Resolution {
+    let rows = inventories.get(inventory).and_then(Value::as_array);
+    if let Some(rows) = rows {
+        for row in rows {
+            if row.get(key_field).and_then(Value::as_str) == Some(key) {
+                return Resolution::Record(row.clone());
+            }
+        }
+    } else {
+        return Resolution::NotApplicable;
+    }
+    let truncated = inventories
+        .get(format!("{inventory}_truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if truncated {
+        Resolution::BeyondCeiling
+    } else {
+        Resolution::Absent
+    }
+}
+
+/// The synthesized `coverage` record for one video inventory:
+/// retained and total counts and truncation, derived from
+/// the ingest document itself (the `coverage_record`
+/// pattern, applied to the nested store).
+fn video_coverage_record(document: &Value, inventory: &str) -> Option<Value> {
+    if !VIDEO_COVERAGE_INVENTORIES.contains(&inventory) {
+        return None;
+    }
+    let inventories = document.get("inventories")?;
+    let retained = inventories
+        .get(inventory)
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len) as u64;
+    let total = inventories
+        .get(format!("{inventory}_total"))
+        .and_then(Value::as_u64)
+        .unwrap_or(retained);
+    let truncated = inventories
+        .get(format!("{inventory}_truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Some(json!({
+        "exhaustive": !truncated && retained == total,
+        "inventory": inventory,
+        "retained": retained,
+        "total": total,
+        "truncated": truncated,
+    }))
+}
+
+fn resolve_video(document: &Value, inventory: &str, key: &str) -> Resolution {
+    let Some(inventories) = document.get("inventories") else {
+        return Resolution::NotApplicable;
+    };
+    if inventory == "coverage" {
+        return match video_coverage_record(document, key) {
+            Some(record) => Resolution::Record(record),
+            None => Resolution::NotApplicable,
+        };
+    }
+    if inventory == "chapters" {
+        let Some(rows) = inventories.get("chapters").and_then(Value::as_array) else {
+            return Resolution::NotApplicable;
+        };
+        for row in rows {
+            let index = row.get("index").and_then(Value::as_u64);
+            if index.map(|i| i.to_string()).as_deref() == Some(key) {
+                return Resolution::Record(row.clone());
+            }
+        }
+        return Resolution::Absent;
+    }
+    if inventory == "metadata" {
+        if key != "metadata" {
+            return Resolution::Absent;
+        }
+        return match inventories.get("metadata") {
+            Some(record) => Resolution::Record(record.clone()),
+            None => Resolution::NotApplicable,
+        };
+    }
+    // The research inventory is Y3's store (YouTube-RE §7.3);
+    // until that stage lands it is honestly not applicable,
+    // never a fabricated empty record.
+    if inventory == "research" {
+        return Resolution::NotApplicable;
+    }
+    for (name, key_field) in VIDEO_ROW_INVENTORIES {
+        if inventory == name {
+            return find_video_rows(inventories, inventory, key_field, key);
+        }
+    }
+    Resolution::NotApplicable
+}
+
+/// Whether any cited span of a video claim is a party to a
+/// retained `transcript_disagreement` record (YouTube-RE
+/// §6.3's conflict cap substrate): the dispute is a record
+/// in the same document the claim binds, so verification
+/// can see it without trusting the caller's word.
+fn cited_span_disputed(document: &Value, locators: &[(&str, &str, &str)]) -> Option<String> {
+    let disagreements = document
+        .get("inventories")
+        .and_then(|inv| inv.get("transcript_disagreements"))
+        .and_then(Value::as_array)?;
+    for (inventory, key, _) in locators {
+        if *inventory != "transcript_spans" {
+            continue;
+        }
+        for record in disagreements {
+            let parties = [
+                record.get("span_key_a").and_then(Value::as_str),
+                record.get("span_key_b").and_then(Value::as_str),
+            ];
+            if parties.contains(&Some(key)) {
+                return record
+                    .get("disagreement_key")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
+/// Whether a window strictly spans a retained coverage gap
+/// (YouTube-RE §6.3's gap rule): the gap record lies wholly
+/// inside the asserted window, so the claim asserts
+/// continuity the evidence does not show.
+fn window_spans_gap(document: &Value, start_ms: u64, end_ms: u64) -> Option<String> {
+    let gaps = document
+        .get("inventories")
+        .and_then(|inv| inv.get("coverage_gaps"))
+        .and_then(Value::as_array)?;
+    for gap in gaps {
+        let (Some(gap_start), Some(gap_end)) = (
+            gap.get("start_ms").and_then(Value::as_u64),
+            gap.get("end_ms").and_then(Value::as_u64),
+        ) else {
+            continue;
+        };
+        if gap_end > gap_start && gap_start >= start_ms && gap_end <= end_ms {
+            return gap
+                .get("gap_key")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+    }
+    None
+}
+
 /// How one `(inventory, key)` locator resolves in a retained
 /// export document.
 #[derive(Clone, Debug)]
@@ -536,6 +736,7 @@ pub fn resolve_record_for_mode(
         DocKind::Archive => resolve_archive(document, inventory, key),
         DocKind::Dossier => resolve_dossier(document, inventory, key),
         DocKind::Overview => resolve_overview(document, inventory, key),
+        DocKind::Video => resolve_video(document, inventory, key),
     }
 }
 
@@ -808,6 +1009,7 @@ fn kind_mode(kind: DocKind) -> &'static str {
         DocKind::Archive => "archive_census",
         DocKind::Dossier => "function",
         DocKind::Overview => "overview",
+        DocKind::Video => "video-ingest",
     }
 }
 
@@ -908,6 +1110,41 @@ fn check_claim(claim: &Claim, document: &Value, kind: DocKind) -> ClaimOutcome {
             }
         }
     }
+    // Video-guide rules (YouTube-RE §6.3): a step claim whose
+    // window spans a recorded coverage gap fails — the claim
+    // asserts continuity the evidence does not show; a step
+    // claim resting on spans disputed by a retained
+    // transcript_disagreement record verifies but caps the
+    // proof's aggregate at partial (see `aggregate`).
+    let mut conflict_cap: Option<String> = None;
+    if kind == DocKind::Video
+        && matches!(
+            claim.class,
+            ClaimClass::DemonstratedStep | ClaimClass::StatedStep
+        )
+    {
+        let statement_obj = claim
+            .statement
+            .as_object()
+            .expect("shape validation requires object statements");
+        let window = (
+            statement_obj.get("start_ms").and_then(Value::as_u64),
+            statement_obj.get("end_ms").and_then(Value::as_u64),
+        );
+        if let (Some(start_ms), Some(end_ms)) = window
+            && let Some(gap_key) = window_spans_gap(document, start_ms, end_ms)
+        {
+            return outcome(
+                claim,
+                Outcome::Failed,
+                format!(
+                    "gap_spanned: the claim's window {start_ms}..{end_ms} spans \
+                     coverage gap {gap_key} recorded in the ingest document"
+                ),
+            );
+        }
+        conflict_cap = cited_span_disputed(document, &locators);
+    }
     let statement = claim
         .statement
         .as_object()
@@ -944,11 +1181,22 @@ fn check_claim(claim: &Claim, document: &Value, kind: DocKind) -> ClaimOutcome {
             );
         }
     }
-    outcome(
-        claim,
-        Outcome::Verified,
-        "bound evidence resolves, digests match, and the records state the claim".to_string(),
-    )
+    match conflict_cap {
+        Some(disagreement_key) => outcome(
+            claim,
+            Outcome::Verified,
+            format!(
+                "conflict_cap: bound evidence resolves, digests match, and \
+                 the records state the claim, but a cited span is disputed \
+                 by {disagreement_key}; the aggregate caps at partial"
+            ),
+        ),
+        None => outcome(
+            claim,
+            Outcome::Verified,
+            "bound evidence resolves, digests match, and the records state the claim".to_string(),
+        ),
+    }
 }
 
 /// The aggregate over a set of outcomes (SPEC §4.1.8):
@@ -959,7 +1207,17 @@ pub fn aggregate(outcomes: &[ClaimOutcome], revision_drift: bool) -> Aggregate {
     if outcomes.iter().any(|o| o.outcome == Outcome::Failed) {
         return Aggregate::Failed;
     }
-    if revision_drift || outcomes.iter().any(|o| o.outcome == Outcome::Unavailable) {
+    // YouTube-RE §6.3's conflict cap joins drift as a
+    // partial-capping condition: a verified claim whose
+    // diagnostic carries the cap prefix was verified over
+    // disputed evidence.
+    let conflict_capped = outcomes
+        .iter()
+        .any(|o| o.diagnostic.starts_with("conflict_cap:"));
+    if revision_drift
+        || conflict_capped
+        || outcomes.iter().any(|o| o.outcome == Outcome::Unavailable)
+    {
         return Aggregate::Partial;
     }
     if outcomes.iter().any(|o| o.outcome == Outcome::Verified) {
@@ -1001,6 +1259,121 @@ pub fn retained_export_path(config: &Config, subject_sha256: &str, mode: &str) -
 pub fn read_retained_export(config: &Config, subject_sha256: &str, mode: &str) -> Option<Value> {
     let bytes = std::fs::read(retained_export_path(config, subject_sha256, mode)).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// The video-ingest store directory for one subject
+/// (YouTube-RE §4.6): `video-ingests/<subject key>/` under
+/// the state dir, holding one `<ingest_id>.json` document
+/// and one `<ingest_id>/` payload directory per ingest.
+pub fn video_ingest_dir(config: &Config, subject_sha256: &str) -> PathBuf {
+    config
+        .state_dir
+        .join("video-ingests")
+        .join(subject_key(subject_sha256))
+}
+
+/// The digest proofs bind for a video ingest document: the
+/// SHA-256 over the document's canonical form with its own
+/// `document_digest` field removed (the `compute_proof_digest`
+/// pattern applied to the ingest store).
+pub fn video_ingest_digest(document: &Value) -> String {
+    let mut stripped = document.clone();
+    if let Some(object) = stripped.as_object_mut() {
+        object.remove("document_digest");
+    }
+    value_digest(&stripped)
+}
+
+/// The ingest document for a subject, when one is retained:
+/// the most recently retrieved document for that subject,
+/// with ingest id as the deterministic tie-break. Ingests
+/// are keyed by media bytes, so several runs of one video
+/// share a subject directory; proofs resolve against the
+/// latest document and bind its digest, so an older document
+/// can never silently satisfy a newer proof.
+pub fn find_video_ingest_document(config: &Config, subject_sha256: &str) -> Option<Value> {
+    let dir = video_ingest_dir(config, subject_sha256);
+    let mut names: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .collect();
+    names.sort();
+    let mut best: Option<Value> = None;
+    for path in names {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(document) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        if document
+            .get("subject")
+            .and_then(|subject| subject.get("sha256"))
+            .and_then(Value::as_str)
+            != Some(subject_sha256)
+        {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some(current) => {
+                let candidate_stamp = document
+                    .get("provenance")
+                    .and_then(|p| p.get("retrieved_at"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let current_stamp = current
+                    .get("provenance")
+                    .and_then(|p| p.get("retrieved_at"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let candidate_id = document
+                    .get("ingest_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let current_id = current
+                    .get("ingest_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                (candidate_stamp, candidate_id) > (current_stamp, current_id)
+            }
+        };
+        if better {
+            best = Some(document);
+        }
+    }
+    best
+}
+
+/// The retained document a proof binds, for every export
+/// mode: `Some` only when the document on disk digests to
+/// the proof's bound digest (§4.1.7 rule 4). The video lane's
+/// document is the ingest document itself, digested by
+/// `video_ingest_digest`; every other mode reads the §9.1
+/// export cache.
+pub fn load_bound_export(
+    config: &Config,
+    subject_sha256: &str,
+    mode: &str,
+    export_digest: &str,
+) -> Option<Value> {
+    if mode == "video-ingest" {
+        let document = find_video_ingest_document(config, subject_sha256)?;
+        if video_ingest_digest(&document) == export_digest {
+            Some(document)
+        } else {
+            None
+        }
+    } else {
+        let document = read_retained_export(config, subject_sha256, mode)?;
+        if value_digest(&document) == export_digest {
+            Some(document)
+        } else {
+            None
+        }
+    }
 }
 
 /// Retain one export document for (subject, mode) in the

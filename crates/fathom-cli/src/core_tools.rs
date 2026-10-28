@@ -41,6 +41,8 @@ pub fn register(registry: &mut Registry) {
                         "description": "Claims to bind: {claim_id, class, statement, evidence: [{inventory, key}]}; record digests are computed by the server, never supplied"},
                     "detail": {"type": "string", "enum": ["complete", "summary"],
                         "description": "Summary is the default; complete adds the stored proof body"},
+                    "export_mode": {"type": "string", "enum": ["video-ingest"],
+                        "description": "Bind the subject's retained video ingest document (YouTube-RE lane) instead of a Ghidra export; 'function' does not apply"},
                     "function": {"type": "string",
                         "description": "Bind the per-function dossier export for this function instead of the overview export"},
                     "target": {"type": "string", "description": "Path under a configured target root"},
@@ -411,40 +413,79 @@ fn build_reconstruction_obligation_ledger(
     }
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
     let subject = subject_for_file(&path)?;
-    let (mode, mode_key) = match function {
-        Some(name) => (
-            "function",
-            format!("function-{}", &sha256_hex(name.as_bytes())[..12]),
-        ),
-        None => ("overview", "overview".to_string()),
-    };
-    // Build is the composition point (SPEC §4.1.8): the one
-    // ledger tool that may run a provider, and only when the
-    // retained store holds no export for this subject/mode.
-    let export_file = proof::retained_export_path(config, &subject.sha256, &mode_key);
-    if !export_file.exists() {
-        fathom_native::engine::run_export(config, &path, &subject.sha256, mode, function)?;
-        let after = subject_for_file(&path)?;
-        if after.sha256 != subject.sha256 {
+    // The video lane (YouTube-RE §6.3) binds claims against
+    // the retained ingest document instead of a Ghidra
+    // export: same ledger, same proof shape, mode
+    // `video-ingest`. Any other export_mode value is refused;
+    // the Ghidra modes are selected by 'function' as before.
+    let video_mode = match optional_str(args, "export_mode") {
+        None => false,
+        Some("video-ingest") => true,
+        Some(other) => {
             return Err(FathomError::new(
-                ErrorCode::ArtifactChanged,
-                "the target changed while Ghidra analyzed it; results discarded",
-            )
-            .with_target(path.display().to_string()));
+                ErrorCode::InvalidRequest,
+                format!("unknown export_mode '{other}'; the only named mode is 'video-ingest'"),
+            ));
         }
+    };
+    if video_mode && function.is_some() {
+        return Err(FathomError::new(
+            ErrorCode::InvalidRequest,
+            "argument 'function' does not apply to export_mode 'video-ingest'",
+        ));
     }
-    let export_bytes = std::fs::read(&export_file).map_err(|error| {
-        FathomError::new(
-            ErrorCode::ExecutionFailure,
-            format!("cannot read retained export: {error}"),
-        )
-    })?;
-    let document: Value = serde_json::from_slice(&export_bytes).map_err(|error| {
-        FathomError::new(
-            ErrorCode::EvidenceIntegrityMismatch,
-            format!("retained export is not the expected JSON document: {error}"),
-        )
-    })?;
+    let (mode, mode_key) = if video_mode {
+        ("video-ingest", "video-ingest".to_string())
+    } else {
+        match function {
+            Some(name) => (
+                "function",
+                format!("function-{}", &sha256_hex(name.as_bytes())[..12]),
+            ),
+            None => ("overview", "overview".to_string()),
+        }
+    };
+    let document: Value = if video_mode {
+        // No provider runs here: the ingest document is
+        // already retained evidence, produced by
+        // ingest_youtube_video.
+        proof::find_video_ingest_document(config, &subject.sha256).ok_or_else(|| {
+            FathomError::new(
+                ErrorCode::InvalidRequest,
+                "no retained video ingest document for this subject; \
+                 run ingest_youtube_video on the source video first",
+            )
+        })?
+    } else {
+        // Build is the composition point (SPEC §4.1.8): the
+        // one ledger tool that may run a provider, and only
+        // when the retained store holds no export for this
+        // subject/mode.
+        let export_file = proof::retained_export_path(config, &subject.sha256, &mode_key);
+        if !export_file.exists() {
+            fathom_native::engine::run_export(config, &path, &subject.sha256, mode, function)?;
+            let after = subject_for_file(&path)?;
+            if after.sha256 != subject.sha256 {
+                return Err(FathomError::new(
+                    ErrorCode::ArtifactChanged,
+                    "the target changed while Ghidra analyzed it; results discarded",
+                )
+                .with_target(path.display().to_string()));
+            }
+        }
+        let export_bytes = std::fs::read(&export_file).map_err(|error| {
+            FathomError::new(
+                ErrorCode::ExecutionFailure,
+                format!("cannot read retained export: {error}"),
+            )
+        })?;
+        serde_json::from_slice(&export_bytes).map_err(|error| {
+            FathomError::new(
+                ErrorCode::EvidenceIntegrityMismatch,
+                format!("retained export is not the expected JSON document: {error}"),
+            )
+        })?
+    };
     let dossier = mode == "function";
     let mut bound_claims: Vec<Value> = Vec::with_capacity(requests.len());
     let mut claims_by_class: BTreeMap<&str, usize> = BTreeMap::new();
@@ -454,7 +495,12 @@ fn build_reconstruction_obligation_ledger(
             // Build-time honesty (§4.1.8): a locator that does
             // not resolve now is refused, never stored as if
             // bound.
-            let record = match proof::resolve_record(&document, dossier, inventory, key) {
+            let resolution = if video_mode {
+                proof::resolve_record_for_mode(&document, "video-ingest", inventory, key)
+            } else {
+                proof::resolve_record(&document, dossier, inventory, key)
+            };
+            let record = match resolution {
                 Resolution::Record(record) => record,
                 Resolution::BeyondCeiling => {
                     return Err(claim_refusal(
@@ -492,7 +538,11 @@ fn build_reconstruction_obligation_ledger(
             "statement": request.statement,
         }));
     }
-    let export_digest = proof::value_digest(&document);
+    let export_digest = if video_mode {
+        proof::video_ingest_digest(&document)
+    } else {
+        proof::value_digest(&document)
+    };
     let mut proof_value = json!({
         "claims": bound_claims,
         "export": {"digest": export_digest, "mode": mode_key},
@@ -640,13 +690,12 @@ fn verify_reconstruction_proof(
     // A document that does not digest to the bound digest is
     // not the evidence the proof cites — absent, for every
     // claim. Verification never re-exports.
-    let retained = proof::read_retained_export(config, &subject.sha256, &parsed.export_mode);
-    let bound_export = match &retained {
-        Some(document) if proof::value_digest(document) == parsed.export_digest => {
-            Some(document.clone())
-        }
-        _ => None,
-    };
+    let bound_export = proof::load_bound_export(
+        config,
+        &subject.sha256,
+        &parsed.export_mode,
+        &parsed.export_digest,
+    );
     // Rule 5: producer drift is computed only when the bound
     // export is present; it caps the aggregate, never blocks.
     let revision_drift = bound_export.is_some()
@@ -845,6 +894,7 @@ mod tests {
                 signing_key_file: None,
                 state_dir: self.state_dir.clone(),
                 target_roots: vec![self.root.canonicalize().unwrap()],
+                video: fathom_core::config::VideoConfig::default(),
             }
         }
 
