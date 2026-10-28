@@ -233,13 +233,14 @@ an imagined client:
 
 ### 4.1.4 Claim model
 
-Six classes, each grounded in finding kinds fathom already
-emits and in what phlow's RE runs actually assert. A claim
+Seven classes, each grounded in finding kinds fathom
+already emits and in what phlow's RE runs actually assert. A claim
 class not in this table is refused at parse time (§4.1.7);
 the table grows by SPEC amendment, not by caller invention.
 
 | Class | The assertion | Evidence it binds | Confidence |
 | --- | --- | --- | --- |
+| `archive_entry` | An entry with the stated per-format fields exists in the named archive container | One entry record from the matching `*_entries` inventory of the retained `archive_census` export (game-archive readers amendment, 2026-10-27) | `observed` |
 | `artifact_classification` | The subject is of format/layout F, with stated properties | `inspect_artifact` / `inspect_binary_layout` findings | `observed` |
 | `call_relationship` | Function A calls / is called by / references B | `call_graph` and `references_to` findings of `analyze_function` | `derived` |
 | `coverage` | The run examined N of M inventory items; the retained inventory is or is not exhaustive, as stated | The envelope `coverage` block and retained-inventory counts of the cited list reads | `observed` |
@@ -710,6 +711,11 @@ pinned in `Cargo.lock` and built offline thereafter.
 | JCS canonicalization | serde_jcs 0.2.0; hand-rolled RFC 8785 | **Hand-roll** with the RFC 8785 test vectors as unit tests; one less dependency for ~100 lines with a public test suite. |
 | .NET metadata | pelite (PE only, no CLI tables); a dedicated ECMA-335 crate (none mature found) | **Manual ECMA-335 parsing** over goblin's PE headers: metadata root, streams, table row geometry, TypeDef/MethodDef/ImplMap reads. The format is a published standard (ECMA-335); the parser is bounded and testable against fixtures. |
 | ASAR | @electron/asar (JS); the format itself | **Implement directly.** ASAR is a pickle-framed JSON header plus concatenated payloads; a reader is ~150 lines and is cross-validated against archives produced by the real `@electron/asar`. |
+| LZ4 block (Unity) | lz4_flex (pure Rust); lz4-sys (FFI) | **Adopt lz4_flex** for `fathom-native` (game-archive readers, 2026-10-27). Pure-Rust block-format decoder matching Unity's raw-block usage; no FFI. The frame format is not used. |
+| LZMA | xz2 (FFI); pure-Rust decoders (unaudited) | **Do not adopt.** LZMA-compressed Unity metadata is reported, not decoded. Revisit only with a named consumer whose bundles are LZMA. |
+| Pickle (Ren'Py index) | serde-pickle and general unpicklers | **Hand-roll a restricted interpreter** (game-archive readers SPEC §5.4): an allowlist of data-only opcodes over a closed value domain. A general unpickler is an execution surface — pickle from an untrusted archive is never deserialised by one. |
+| SHA-1 (Unreal pak anchors) | sha1 0.11 (RustCrypto); hand-rolled | **Adopt sha1 0.11** as a workspace dependency for `fathom-native`. The tree already trusts this family (`sha2` 0.11); hand-rolling a second hash invites divergence. |
+| Zlib (RPA index; pak blocks) | flate2 (already a workspace dependency) | **Reuse flate2** — add to `fathom-native`'s manifest. Already adopted and locked; decompression is always bounded-output. |
 | Godot PCK | the format itself (Godot engine reader layout) | **Implement directly.** GDPC header + directory parse for format versions 1–3; every readable entry is SHA-256-hashed and cross-checked against the MD5 the directory declares (hand-rolled RFC 1321 implementation, public test vectors). Decryption is NOT-IMPLEMENTED: encrypted directories and entries are reported as unknowns, never skipped. |
 | Process capture | portable-pty (PTY); std::process pipes | **Pipes in this run** (output, exit, timing, hashes). PTY support is scaffolded; upstream's interactive PTY scenarios are named NOT-IMPLEMENTED until portable-pty is adopted. |
 | HAR reading | serde_json over the HAR 1.2 schema | **Implement directly**; no crate needed. |
