@@ -16,6 +16,11 @@ no engine required. Mach-O binaries additionally get a dylib
 projection: load commands, linked libraries, rpaths, install
 name, and exports/imports where present, per architecture for
 fat binaries. Project state is cached per subject SHA-256.
+Godot PCK archives are read by a hand-implemented reader:
+header and directory parse (format versions 1–3), per-entry
+SHA-256 with the directory's MD5 as an integrity cross-check;
+encrypted directories and entries are reported as unknowns,
+never skipped, and decryption is not implemented.
 
 </details>
 

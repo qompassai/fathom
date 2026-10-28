@@ -29,6 +29,9 @@ pub const OUTPUT_BYTES_MAX: usize = 8_388_608;
 /// additionally capped by the inventory's own count bound.
 pub const PAGE_LIMIT_MAX: usize = 20_000;
 
+/// Entries retained from one Godot PCK archive listing.
+pub const PCK_ENTRIES_MAX: usize = 100_000;
+
 /// Bytes captured from one `capture_process` stream.
 pub const PROCESS_OUTPUT_BYTES_MAX: usize = 1_048_576;
 

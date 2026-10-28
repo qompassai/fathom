@@ -114,6 +114,7 @@ Tools (alphabetical; status = this run):
 | `inspect_binary_layout` | read | native-layout | built |
 | `inspect_evm_bytecode` | read | evm | built (interface inference scaffolded) |
 | `inspect_firmware` | read | firmware | built (signature scan; no extraction) |
+| `inspect_godot_pck` | read | godot | built (decryption NOT-IMPLEMENTED; encrypted entries are unknowns) |
 | `inspect_managed_assembly` | read | managed | built (CIL decode scaffolded) |
 | `inspect_source_map` | read | js | built |
 | `inspect_web_capture` | read | web | built |
@@ -709,6 +710,7 @@ pinned in `Cargo.lock` and built offline thereafter.
 | JCS canonicalization | serde_jcs 0.2.0; hand-rolled RFC 8785 | **Hand-roll** with the RFC 8785 test vectors as unit tests; one less dependency for ~100 lines with a public test suite. |
 | .NET metadata | pelite (PE only, no CLI tables); a dedicated ECMA-335 crate (none mature found) | **Manual ECMA-335 parsing** over goblin's PE headers: metadata root, streams, table row geometry, TypeDef/MethodDef/ImplMap reads. The format is a published standard (ECMA-335); the parser is bounded and testable against fixtures. |
 | ASAR | @electron/asar (JS); the format itself | **Implement directly.** ASAR is a pickle-framed JSON header plus concatenated payloads; a reader is ~150 lines and is cross-validated against archives produced by the real `@electron/asar`. |
+| Godot PCK | the format itself (Godot engine reader layout) | **Implement directly.** GDPC header + directory parse for format versions 1–3; every readable entry is SHA-256-hashed and cross-checked against the MD5 the directory declares (hand-rolled RFC 1321 implementation, public test vectors). Decryption is NOT-IMPLEMENTED: encrypted directories and entries are reported as unknowns, never skipped. |
 | Process capture | portable-pty (PTY); std::process pipes | **Pipes in this run** (output, exit, timing, hashes). PTY support is scaffolded; upstream's interactive PTY scenarios are named NOT-IMPLEMENTED until portable-pty is adopted. |
 | HAR reading | serde_json over the HAR 1.2 schema | **Implement directly**; no crate needed. |
 | EVM | EVMole as WASM (upstream's route); hand analysis | **Hand analysis** for the dispatcher/selector slice, findings marked `inferred`. Interface reconstruction beyond selectors is scaffolded. |
@@ -805,8 +807,9 @@ Deterministic, fail-closed, evaluated before every handler:
   max target bytes, max file count per inventory, max decompile
   bytes, max captured output bytes, provider timeout (default
   330 s for Ghidra, matching upstream's startup deadline scale),
-  max ASAR entries. A bound hit is `resource_constraint` or a
-  reported truncation — never an unbounded retry.
+  max ASAR entries, max PCK entries. A bound hit is
+  `resource_constraint` or a reported truncation — never an
+  unbounded retry.
 - **Processes.** Providers run only owned child processes, in
   their own process groups, killed on timeout or cancellation.
   Nothing kills a process it cannot prove it owns (upstream's

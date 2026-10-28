@@ -180,6 +180,9 @@ pub fn classify(head: &[u8]) -> &'static str {
     if head.starts_with(&[0x50, 0x4b, 0x03, 0x04]) {
         return "ZIP";
     }
+    if head.starts_with(b"GDPC") {
+        return "Godot PCK";
+    }
     if head.len() >= 17
         && head[0..4] == [4, 0, 0, 0]
         && head[16] == b'{'
@@ -245,6 +248,7 @@ mod tests {
         assert_eq!(classify(&[0x7f, b'E', b'L', b'F', 2]), "ELF");
         assert_eq!(classify(b"MZ"), "PE");
         assert_eq!(classify(b"PK\x03\x04rest"), "ZIP");
+        assert_eq!(classify(b"GDPC\x02\0\0\0"), "Godot PCK");
         assert_eq!(classify(b"#!/bin/sh\n"), "script");
         assert_eq!(classify(b"plain text"), "text");
         assert_eq!(classify(&[0x00, 0x01]), "unknown");

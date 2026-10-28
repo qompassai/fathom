@@ -11,6 +11,7 @@
 pub mod artifact;
 pub mod engine;
 pub mod ghidra;
+pub mod godot;
 pub mod il2cpp;
 pub mod layout;
 
@@ -91,6 +92,18 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(layout::inspect_binary_layout),
+    );
+    registry.register(
+        descriptor(
+            "inspect_godot_pck",
+            ToolClass::Read,
+            "godot",
+            "Godot PCK archive inventory: header, directory entries with \
+             content hashes and MD5 cross-checks; encrypted, sparse, and \
+             unreadable entries are explicit unknowns",
+            target_schema(),
+        ),
+        Arc::new(godot::inspect_godot_pck),
     );
     registry.register(
         descriptor(
