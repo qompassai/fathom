@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 pub mod metadata;
+pub mod native_aot;
 
 use serde_json::{Value, json};
 use std::path::Path;
@@ -54,10 +55,49 @@ fn inspect_managed_assembly(
             Confidence::Observed,
             json!({"format": "PE", "managed": false}),
         ));
-        evidence.add_unknown(
-            "managed_metadata",
-            "this PE has no CLI header; it is a native binary, not a .NET assembly",
-        );
+        // S8: a PE with no CLI header may still be .NET —
+        // NativeAOT images are native PEs with the runtime
+        // baked in. Screen for its marker families before
+        // calling the binary plain native.
+        let screen = native_aot::analyze_pe(&bytes);
+        evidence.add_finding(Finding::new(
+            "native_aot_screen",
+            Confidence::Observed,
+            json!({
+                "classified_native_aot": screen.classified,
+                "component_strings": screen.component_strings,
+                "runtime_exports": screen.runtime_exports,
+                "sections": serde_json::to_value(&screen.sections).unwrap_or(Value::Null),
+            }),
+        ));
+        if screen.classified {
+            evidence.add_finding(
+                Finding::new(
+                    "native_aot",
+                    Confidence::Derived,
+                    json!({
+                        "format": "NativeAOT",
+                        "type_name_census": screen.type_name_census,
+                    }),
+                )
+                .with_limitation(
+                    "classification is a marker screen (component strings + runtime \
+                     exports), not a metadata parse; the type-name census is \
+                     string facts, not type facts",
+                ),
+            );
+            evidence.add_unknown(
+                "native_format_metadata",
+                "the NativeFormat metadata graph (type and method tables) is \
+                 NOT-IMPLEMENTED in this stage; the inventory is the screen, \
+                 the sections, the exports, and the string census",
+            );
+        } else {
+            evidence.add_unknown(
+                "managed_metadata",
+                "this PE has no CLI header; it is a native binary, not a .NET assembly",
+            );
+        }
         return Ok(evidence.to_value());
     };
     evidence.add_finding(Finding::new(
