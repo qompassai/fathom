@@ -246,10 +246,10 @@ fn validate_url(raw: &str) -> Result<String, FathomError> {
     if authority.contains('@') {
         return Err(invalid("urls with userinfo credentials are rejected"));
     }
-    if let Some(port) = authority_port(authority) {
-        if port.parse::<u16>().is_err() {
-            return Err(invalid("url port is not a valid u16"));
-        }
+    if let Some(port) = authority_port(authority)
+        && port.parse::<u16>().is_err()
+    {
+        return Err(invalid("url port is not a valid u16"));
     }
     Ok(without_fragment.to_string())
 }
@@ -335,28 +335,28 @@ fn parse_dom(dom: &str, base_url: &str) -> BrowserInventory {
                 }
             }
             "button" | "input" | "select" | "textarea" => {
-                if let Some(form) = &mut current_form {
-                    if form.fields.len() < FORM_FIELD_COUNT_MAX {
-                        form.fields.push(FormField {
-                            id: tag
-                                .attrs
-                                .get("id")
-                                .map(|v| truncate_text(v, VALUE_CHARS_MAX)),
-                            name: tag
-                                .attrs
-                                .get("name")
-                                .map(|v| truncate_text(v, VALUE_CHARS_MAX)),
-                            required: tag.attrs.contains_key("required"),
-                            field_type: if tag.name == "input" {
-                                tag.attrs
-                                    .get("type")
-                                    .cloned()
-                                    .unwrap_or_else(|| "text".to_string())
-                            } else {
-                                tag.name.clone()
-                            },
-                        });
-                    }
+                if let Some(form) = &mut current_form
+                    && form.fields.len() < FORM_FIELD_COUNT_MAX
+                {
+                    form.fields.push(FormField {
+                        id: tag
+                            .attrs
+                            .get("id")
+                            .map(|v| truncate_text(v, VALUE_CHARS_MAX)),
+                        name: tag
+                            .attrs
+                            .get("name")
+                            .map(|v| truncate_text(v, VALUE_CHARS_MAX)),
+                        required: tag.attrs.contains_key("required"),
+                        field_type: if tag.name == "input" {
+                            tag.attrs
+                                .get("type")
+                                .cloned()
+                                .unwrap_or_else(|| "text".to_string())
+                        } else {
+                            tag.name.clone()
+                        },
+                    });
                 }
             }
             "form" => {

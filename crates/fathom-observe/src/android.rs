@@ -228,18 +228,19 @@ fn contents_facts(entries: &[ZipEntry]) -> Value {
         } else if name.starts_with("META-INF/") {
             signature_files.push(name.to_string());
         } else if let Some(rest) = name.strip_prefix("lib/") {
-            if let Some((abi, library)) = rest.split_once('/') {
-                if library.ends_with(".so") && !library.contains('/') {
-                    if !abi_names.contains(&abi.to_string()) {
-                        abi_names.push(abi.to_string());
-                        abis.push(json!({"abi": abi, "libraries": []}));
-                    }
-                    if let Some(row) = abis.iter_mut().find(|row| row["abi"] == abi)
-                        && let Some(list) = row["libraries"].as_array_mut()
-                        && list.len() < LIBRARIES_PER_ABI_MAX
-                    {
-                        list.push(json!(library));
-                    }
+            if let Some((abi, library)) = rest.split_once('/')
+                && library.ends_with(".so")
+                && !library.contains('/')
+            {
+                if !abi_names.contains(&abi.to_string()) {
+                    abi_names.push(abi.to_string());
+                    abis.push(json!({"abi": abi, "libraries": []}));
+                }
+                if let Some(row) = abis.iter_mut().find(|row| row["abi"] == abi)
+                    && let Some(list) = row["libraries"].as_array_mut()
+                    && list.len() < LIBRARIES_PER_ABI_MAX
+                {
+                    list.push(json!(library));
                 }
             }
         } else if name.starts_with("classes") && name.ends_with(".dex") {

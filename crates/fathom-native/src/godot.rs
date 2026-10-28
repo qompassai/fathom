@@ -580,11 +580,10 @@ fn md5_digest(input: &[u8]) -> [u8; 16] {
         0xeb86d391,
     ];
     let mut state: [u32; 4] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476];
-    let mut blocks = input.chunks_exact(64);
-    for block in &mut blocks {
+    let (blocks, remainder) = input.as_chunks::<64>();
+    for block in blocks {
         md5_block(&mut state, block, &SHIFTS, &TABLE);
     }
-    let remainder = blocks.remainder();
     let mut tail = [0_u8; 128];
     tail[..remainder.len()].copy_from_slice(remainder);
     tail[remainder.len()] = 0x80;

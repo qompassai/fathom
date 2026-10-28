@@ -78,17 +78,17 @@ fn inspect_directory(path: &Path) -> Result<Value, FathomError> {
     }
     evidence.add_finding(inventory);
     let plist = path.join("Info.plist");
-    if plist.is_file() {
-        if let Ok(text) = fs::read_to_string(&plist) {
-            let facts = json!({
-                "CFBundleExecutable": plist_string(&text, "CFBundleExecutable"),
-                "CFBundleIdentifier": plist_string(&text, "CFBundleIdentifier"),
-                "CFBundleName": plist_string(&text, "CFBundleName"),
-                "CFBundleShortVersionString":
-                    plist_string(&text, "CFBundleShortVersionString"),
-            });
-            evidence.add_finding(Finding::new("info_plist", Confidence::Observed, facts));
-        }
+    if plist.is_file()
+        && let Ok(text) = fs::read_to_string(&plist)
+    {
+        let facts = json!({
+            "CFBundleExecutable": plist_string(&text, "CFBundleExecutable"),
+            "CFBundleIdentifier": plist_string(&text, "CFBundleIdentifier"),
+            "CFBundleName": plist_string(&text, "CFBundleName"),
+            "CFBundleShortVersionString":
+                plist_string(&text, "CFBundleShortVersionString"),
+        });
+        evidence.add_finding(Finding::new("info_plist", Confidence::Observed, facts));
     }
     Ok(evidence.to_value())
 }

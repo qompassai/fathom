@@ -394,39 +394,39 @@ impl<'a> Visit<'a> for Collector {
     }
 
     fn visit_new_expression(&mut self, new: &NewExpression<'a>) {
-        if let Some(path) = self.canonical(&new.callee) {
-            if path == "BrowserWindow" || path.ends_with(".BrowserWindow") {
-                self.facts.electron.uses_electron = true;
-                let mut window = WindowFacts::default();
-                if let Some(Expression::ObjectExpression(object)) =
-                    new.arguments.first().and_then(|arg| arg.as_expression())
-                {
-                    for (key, value) in object_entries(object) {
-                        if key == "webPreferences" {
-                            if let Expression::ObjectExpression(preferences) = value {
-                                for (pref_key, pref_value) in object_entries(preferences.as_ref()) {
-                                    match pref_key.as_str() {
-                                        "contextIsolation" => {
-                                            window.context_isolation = bool_value(pref_value);
-                                        }
-                                        "nodeIntegration" => {
-                                            window.node_integration = bool_value(pref_value);
-                                        }
-                                        "preload" => {
-                                            window.preload = string_value(pref_value);
-                                        }
-                                        "sandbox" => {
-                                            window.sandbox = bool_value(pref_value);
-                                        }
-                                        _ => {}
-                                    }
+        if let Some(path) = self.canonical(&new.callee)
+            && (path == "BrowserWindow" || path.ends_with(".BrowserWindow"))
+        {
+            self.facts.electron.uses_electron = true;
+            let mut window = WindowFacts::default();
+            if let Some(Expression::ObjectExpression(object)) =
+                new.arguments.first().and_then(|arg| arg.as_expression())
+            {
+                for (key, value) in object_entries(object) {
+                    if key == "webPreferences"
+                        && let Expression::ObjectExpression(preferences) = value
+                    {
+                        for (pref_key, pref_value) in object_entries(preferences.as_ref()) {
+                            match pref_key.as_str() {
+                                "contextIsolation" => {
+                                    window.context_isolation = bool_value(pref_value);
                                 }
+                                "nodeIntegration" => {
+                                    window.node_integration = bool_value(pref_value);
+                                }
+                                "preload" => {
+                                    window.preload = string_value(pref_value);
+                                }
+                                "sandbox" => {
+                                    window.sandbox = bool_value(pref_value);
+                                }
+                                _ => {}
                             }
                         }
                     }
                 }
-                self.facts.electron.windows.push(window);
             }
+            self.facts.electron.windows.push(window);
         }
         walk::walk_new_expression(self, new);
     }
@@ -498,14 +498,14 @@ fn property_key_name(key: &PropertyKey) -> String {
 }
 
 fn require_source(call: &CallExpression) -> Option<String> {
-    if let Expression::Identifier(identifier) = &call.callee {
-        if identifier.name.as_str() == "require" {
-            return call
-                .arguments
-                .first()
-                .and_then(|arg| arg.as_expression())
-                .and_then(string_value);
-        }
+    if let Expression::Identifier(identifier) = &call.callee
+        && identifier.name.as_str() == "require"
+    {
+        return call
+            .arguments
+            .first()
+            .and_then(|arg| arg.as_expression())
+            .and_then(string_value);
     }
     None
 }

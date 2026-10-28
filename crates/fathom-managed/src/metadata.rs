@@ -383,7 +383,9 @@ fn parse_user_strings(heap: &[u8]) -> Result<(Vec<String>, bool), FathomError> {
         // The final payload byte is a terminal flag, not a char.
         let char_bytes = &payload[..payload.len().saturating_sub(1)];
         let units: Vec<u16> = char_bytes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
             .collect();
         let text: String = String::from_utf16_lossy(&units)

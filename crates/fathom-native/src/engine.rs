@@ -22,10 +22,10 @@ use fathom_core::process::{ProcessSpec, run};
 /// then `FATHOM_GHIDRA_HEADLESS`, then `$PATH`, then the Arch
 /// package location. Returns the first candidate that exists.
 pub fn locate_headless(config: &Config) -> Option<PathBuf> {
-    if let Some(path) = &config.ghidra_headless {
-        if path.exists() {
-            return Some(path.clone());
-        }
+    if let Some(path) = &config.ghidra_headless
+        && path.exists()
+    {
+        return Some(path.clone());
     }
     if let Ok(path) = std::env::var("FATHOM_GHIDRA_HEADLESS") {
         let candidate = PathBuf::from(path);

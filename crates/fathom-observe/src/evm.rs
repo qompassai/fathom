@@ -35,7 +35,7 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, FathomError> {
             "bytecode is empty",
         ));
     }
-    if body.len() % 2 != 0 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !body.len().is_multiple_of(2) || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(FathomError::new(
             ErrorCode::UnsupportedTarget,
             "bytecode is not well-formed hex (even length, hex digits only)",
@@ -51,7 +51,7 @@ fn decode_hex(text: &str) -> Result<Vec<u8>, FathomError> {
         ));
     }
     let mut out = Vec::with_capacity(body.len() / 2);
-    for pair in body.as_bytes().chunks_exact(2) {
+    for pair in body.as_bytes().as_chunks::<2>().0 {
         let hi = (pair[0] as char).to_digit(16).expect("hexdigit checked");
         let lo = (pair[1] as char).to_digit(16).expect("hexdigit checked");
         out.push((hi * 16 + lo) as u8);
