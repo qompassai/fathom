@@ -25,6 +25,10 @@ pub const INSTRUCTION_COUNT_MAX: usize = 2_000;
 /// Bytes captured from one child-process stream.
 pub const OUTPUT_BYTES_MAX: usize = 8_388_608;
 
+/// Ceiling on rows in one paged inventory read. A page is
+/// additionally capped by the inventory's own count bound.
+pub const PAGE_LIMIT_MAX: usize = 20_000;
+
 /// Bytes captured from one `capture_process` stream.
 pub const PROCESS_OUTPUT_BYTES_MAX: usize = 1_048_576;
 

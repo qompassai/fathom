@@ -22,6 +22,23 @@ use std::sync::Arc;
 use fathom_core::policy::ToolClass;
 use fathom_core::registry::{Registry, descriptor, target_schema};
 
+/// The `{target}` schema plus the paging arguments the retained
+/// inventory reads accept (SPEC §9.1 read pattern).
+fn inventory_schema() -> serde_json::Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "minimum": 1,
+                "description": "Rows in this page; capped at the inventory's count bound"},
+            "offset": {"type": "integer", "minimum": 0,
+                "description": "Retained rows to skip before this page"},
+            "target": {"type": "string", "description": "Path under a configured target root"},
+        },
+        "required": ["target"],
+        "additionalProperties": false,
+    })
+}
+
 /// Register the native provider's tools, all implemented.
 pub fn register(registry: &mut Registry) {
     registry.register(
@@ -29,10 +46,13 @@ pub fn register(registry: &mut Registry) {
             "analyze_function",
             ToolClass::Read,
             "ghidra",
-            "Function dossier: listing, bounded decompile, callers, callees",
+            "Function dossier: identity, counts, and call-graph size by default; \
+             detail \"complete\" adds the listing, bounded decompile, callers, and callees",
             json!({
                 "type": "object",
                 "properties": {
+                    "detail": {"type": "string", "enum": ["complete", "summary"],
+                        "description": "View over the retained export; summary is the default"},
                     "function": {"type": "string"},
                     "target": {"type": "string"},
                 },
@@ -141,8 +161,9 @@ pub fn register(registry: &mut Registry) {
             "list_functions",
             ToolClass::Read,
             "ghidra",
-            "Function inventory with classifications and signatures",
-            target_schema(),
+            "Function inventory with classifications and signatures; \
+             offset/limit page the retained rows",
+            inventory_schema(),
         ),
         Arc::new(ghidra::list_functions),
     );
@@ -151,8 +172,9 @@ pub fn register(registry: &mut Registry) {
             "list_names",
             ToolClass::Read,
             "ghidra",
-            "Symbol inventory: addresses, names, types",
-            target_schema(),
+            "Symbol inventory: addresses, names, types; \
+             offset/limit page the retained rows",
+            inventory_schema(),
         ),
         Arc::new(ghidra::list_names),
     );
@@ -161,8 +183,9 @@ pub fn register(registry: &mut Registry) {
             "list_strings",
             ToolClass::Read,
             "ghidra",
-            "Defined-string inventory with addresses",
-            target_schema(),
+            "Defined-string inventory with addresses; \
+             offset/limit page the retained rows",
+            inventory_schema(),
         ),
         Arc::new(ghidra::list_strings),
     );
