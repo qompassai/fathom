@@ -5,7 +5,7 @@
 //! parse is named in the unknowns, never silently skipped.
 
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,17 @@ use crate::sourcemap::{MAP_BYTES_MAX, parse_source_map};
 const EXTENSIONS: [&str; 8] = ["js", "cjs", "mjs", "ts", "tsx", "jsx", "mts", "cts"];
 /// Per-module read bound; larger modules are reported, not parsed.
 const MODULE_BYTES_MAX: u64 = 8_388_608;
+
+/// App-wide literal-channel usage by direction, the input to
+/// the IPC pairing summary.
+#[derive(Default)]
+struct IpcCounts {
+    handle: usize,
+    invoke: usize,
+    on: usize,
+    send: usize,
+    send_sync: usize,
+}
 
 pub fn analyze_javascript_application(
     _: &Registry,
@@ -52,6 +63,8 @@ pub fn analyze_javascript_application(
     let mut source_map_rows = Vec::new();
     let mut parse_error_rows = Vec::new();
     let mut electron_rows = Vec::new();
+    let mut channel_counts: BTreeMap<String, IpcCounts> = BTreeMap::new();
+    let mut dynamic_site_total = 0usize;
     let file_set: BTreeSet<PathBuf> = files.iter().cloned().collect();
 
     for file in &files {
@@ -91,6 +104,38 @@ pub fn analyze_javascript_application(
                 format!("module {relative}"),
                 "module did not parse; its imports and boundaries are unknown",
             );
+        }
+        if !facts.electron.ipc_dynamic.is_empty() {
+            dynamic_site_total += facts.electron.ipc_dynamic.len();
+            let shapes: BTreeSet<String> = facts
+                .electron
+                .ipc_dynamic
+                .iter()
+                .map(|site| format!("{} ({})", site.api, site.expression))
+                .collect();
+            evidence.add_unknown(
+                format!("module {relative}"),
+                format!(
+                    "computed IPC channel name not resolvable statically at {} call site(s): {}",
+                    facts.electron.ipc_dynamic.len(),
+                    shapes.iter().cloned().collect::<Vec<_>>().join(", "),
+                ),
+            );
+        }
+        for channel in &facts.electron.ipc_handle {
+            channel_counts.entry(channel.clone()).or_default().handle += 1;
+        }
+        for channel in &facts.electron.ipc_invoke {
+            channel_counts.entry(channel.clone()).or_default().invoke += 1;
+        }
+        for channel in &facts.electron.ipc_on {
+            channel_counts.entry(channel.clone()).or_default().on += 1;
+        }
+        for channel in &facts.electron.ipc_send {
+            channel_counts.entry(channel.clone()).or_default().send += 1;
+        }
+        for channel in &facts.electron.ipc_send_sync {
+            channel_counts.entry(channel.clone()).or_default().send_sync += 1;
         }
         for import in &facts.imports {
             if import.source.starts_with('.') {
@@ -151,6 +196,56 @@ pub fn analyze_javascript_application(
             Confidence::Observed,
             json!({"modules": electron_rows}),
         ));
+    }
+    if !channel_counts.is_empty() || dynamic_site_total > 0 {
+        let mut channel_rows = Vec::new();
+        let mut ambiguous_names = Vec::new();
+        let (mut paired, mut ambiguous, mut unmatched) = (0usize, 0usize, 0usize);
+        for (name, counts) in &channel_counts {
+            let status = ipc_pairing_status(counts);
+            match status {
+                "ambiguous" => {
+                    ambiguous += 1;
+                    ambiguous_names.push(name.clone());
+                }
+                "paired" => paired += 1,
+                _ => unmatched += 1,
+            }
+            channel_rows.push(json!({
+                "channel": name,
+                "handle": counts.handle,
+                "invoke": counts.invoke,
+                "on": counts.on,
+                "send": counts.send,
+                "send_sync": counts.send_sync,
+                "status": status,
+            }));
+        }
+        let mut pairing = Finding::new(
+            "ipc_pairing",
+            Confidence::Derived,
+            json!({
+                "ambiguous": ambiguous_names,
+                "channels": channel_rows,
+                "counts": {
+                    "ambiguous": ambiguous,
+                    "channels": channel_counts.len(),
+                    "paired": paired,
+                    "unmatched": unmatched,
+                },
+                "dynamic_sites": dynamic_site_total,
+            }),
+        );
+        if dynamic_site_total > 0 {
+            pairing = pairing.with_limitation(format!(
+                "pairing covers literal channels only: {dynamic_site_total} computed channel site(s) cannot be paired"
+            ));
+        }
+        if !parse_error_rows.is_empty() {
+            pairing = pairing
+                .with_limitation("pairing is partial: unparseable modules contribute no channels");
+        }
+        evidence.add_finding(pairing);
     }
     if !parse_error_rows.is_empty() {
         evidence.add_finding(Finding::new(
@@ -243,6 +338,29 @@ fn collect_modules(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> Result<(
     Ok(())
 }
 
+/// Pairing verdict for one literal channel, from its app-wide
+/// usage counts. A channel registered in the main process with
+/// both `handle` and `on` is ambiguous — transmissions on it
+/// have two receiver styles — and is never reported as paired.
+/// A channel is paired only when every direction present has
+/// its counterpart (invoke ↔ handle, send/sendSync ↔ on) and
+/// at least one complete pair exists; anything else is
+/// unmatched, listed rather than silently dropped.
+fn ipc_pairing_status(counts: &IpcCounts) -> &'static str {
+    if counts.handle > 0 && counts.on > 0 {
+        return "ambiguous";
+    }
+    let invoke_balanced = (counts.invoke == 0) == (counts.handle == 0);
+    let send_balanced = (counts.send + counts.send_sync == 0) == (counts.on == 0);
+    let any_pair = (counts.invoke > 0 && counts.handle > 0)
+        || (counts.send + counts.send_sync > 0 && counts.on > 0);
+    if invoke_balanced && send_balanced && any_pair {
+        "paired"
+    } else {
+        "unmatched"
+    }
+}
+
 fn read_package_json(root: &Path) -> Option<Value> {
     let text = fs::read_to_string(root.join("package.json")).ok()?;
     let parsed: Value = serde_json::from_str(&text).ok()?;
@@ -302,6 +420,115 @@ mod tests {
         .unwrap()
     }
 
+    fn run_fixture(test_name: &str, files: &[(&str, &str)]) -> (PathBuf, Value) {
+        let root =
+            std::env::temp_dir().join(format!("fathom-js-test-{}-{test_name}", std::process::id()));
+        let app = root.join("app");
+        for (relative, contents) in files {
+            let path = app.join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, contents).unwrap();
+        }
+        let config = fixture_config(&root);
+        let args = json!({"target": app.display().to_string()});
+        let value = analyze_javascript_application(&Registry::new(), &config, &args).unwrap();
+        (root, value)
+    }
+
+    fn pairing_finding(value: &Value) -> &Value {
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["kind"] == "ipc_pairing")
+            .expect("ipc_pairing finding")
+    }
+
+    #[test]
+    fn adversarial_ambiguous_channel_is_not_paired() {
+        let (root, value) = run_fixture(
+            "ambiguous",
+            &[
+                (
+                    "main.js",
+                    "const { ipcMain } = require('electron');\nipcMain.handle('dup', () => {});\nipcMain.on('dup', () => {});\n",
+                ),
+                (
+                    "preload.js",
+                    "const { ipcRenderer } = require('electron');\nipcRenderer.invoke('dup');\n",
+                ),
+            ],
+        );
+        let pairing = pairing_finding(&value);
+        assert_eq!(pairing["facts"]["counts"]["paired"], 0);
+        assert_eq!(pairing["facts"]["counts"]["ambiguous"], 1);
+        assert_eq!(pairing["facts"]["ambiguous"][0], "dup");
+        let channels = pairing["facts"]["channels"].as_array().unwrap();
+        assert_eq!(channels[0]["status"], "ambiguous");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_unmatched_endpoints_are_listed_not_paired() {
+        let (root, value) = run_fixture(
+            "unmatched",
+            &[
+                (
+                    "main.js",
+                    "const { ipcMain } = require('electron');\nipcMain.handle('main:only', () => {});\n",
+                ),
+                (
+                    "preload.js",
+                    "const { ipcRenderer } = require('electron');\nipcRenderer.send('renderer:only');\n",
+                ),
+            ],
+        );
+        let pairing = pairing_finding(&value);
+        assert_eq!(pairing["facts"]["counts"]["paired"], 0);
+        assert_eq!(pairing["facts"]["counts"]["unmatched"], 2);
+        let channels = pairing["facts"]["channels"].as_array().unwrap();
+        assert_eq!(channels.len(), 2);
+        assert!(
+            channels
+                .iter()
+                .all(|channel| channel["status"] == "unmatched")
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_dynamic_channel_site_is_an_unknown() {
+        let (root, value) = run_fixture(
+            "dynamic",
+            &[(
+                "main.js",
+                "const { ipcMain } = require('electron');\nconst c = process.env.CH;\nipcMain.handle(c, () => {});\n",
+            )],
+        );
+        let unknowns = value["unknowns"].as_array().unwrap();
+        let unknown = unknowns
+            .iter()
+            .find(|u| u["aspect"] == "module main.js")
+            .expect("dynamic-site unknown");
+        let reason = unknown["reason"].as_str().unwrap();
+        assert!(
+            reason.contains("computed IPC channel name not resolvable statically"),
+            "{reason}"
+        );
+        assert!(reason.contains("ipcMain.handle (identifier)"), "{reason}");
+        let pairing = pairing_finding(&value);
+        assert_eq!(pairing["facts"]["dynamic_sites"], 1);
+        assert_eq!(pairing["facts"]["counts"]["channels"], 0);
+        let limitations = pairing["limitations"].as_array().unwrap();
+        assert!(
+            limitations
+                .iter()
+                .any(|l| l.as_str().unwrap().contains("computed channel site")),
+            "{limitations:?}"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
     #[test]
     fn validation_fixture_app_end_to_end() {
         let root = std::env::temp_dir().join(format!("fathom-js-test-{}", std::process::id()));
@@ -345,6 +572,35 @@ app.whenReady().then(() => {});
             .expect("boundaries finding");
         let channels = &boundaries["facts"]["modules"][0]["boundaries"]["ipc_handle"];
         assert_eq!(channels[0], "fixture:greet");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_ipc_pairing_summary() {
+        let (root, value) = run_fixture(
+            "pairing",
+            &[
+                (
+                    "main.js",
+                    "const { ipcMain } = require('electron');\nipcMain.handle('fixture:greet', () => {});\nipcMain.on('fixture:ping', () => {});\n",
+                ),
+                (
+                    "preload.js",
+                    "const { ipcRenderer } = require('electron');\nipcRenderer.invoke('fixture:greet');\nipcRenderer.send('fixture:ping');\n",
+                ),
+            ],
+        );
+        let pairing = pairing_finding(&value);
+        assert_eq!(pairing["facts"]["counts"]["channels"], 2);
+        assert_eq!(pairing["facts"]["counts"]["paired"], 2);
+        assert_eq!(pairing["facts"]["counts"]["ambiguous"], 0);
+        assert_eq!(pairing["facts"]["counts"]["unmatched"], 0);
+        assert_eq!(pairing["facts"]["dynamic_sites"], 0);
+        let channels = pairing["facts"]["channels"].as_array().unwrap();
+        assert!(
+            channels.iter().all(|channel| channel["status"] == "paired"),
+            "{channels:?}"
+        );
         fs::remove_dir_all(&root).ok();
     }
 }

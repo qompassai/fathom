@@ -5,7 +5,9 @@
 //! exposures, and `BrowserWindow` web preferences. Local names
 //! are resolved through import/`require` aliases so destructured
 //! Electron APIs are recognized; a call the analyzer cannot
-//! resolve is simply not a fact.
+//! resolve is simply not a fact — except an IPC call whose
+//! channel argument is computed: that site is recorded in
+//! `ipc_dynamic` as an explicit unknown, never dropped.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -23,9 +25,23 @@ pub struct BridgeExposure {
     pub name: String,
 }
 
+/// An IPC call site whose channel argument is not a static
+/// literal. The site is evidence of a channel the analyzer
+/// cannot name: recorded as an unknown, never as a fact and
+/// never silently dropped.
+#[derive(Debug, Default, Serialize)]
+pub struct DynamicChannelSite {
+    /// Canonical API that was called ("ipcMain.handle").
+    pub api: String,
+    /// Shape of the unresolvable argument ("identifier",
+    /// "template", "call", "member", "no_argument", "other").
+    pub expression: String,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct ElectronFacts {
     pub bridge_exposures: Vec<BridgeExposure>,
+    pub ipc_dynamic: Vec<DynamicChannelSite>,
     pub ipc_handle: Vec<String>,
     pub ipc_invoke: Vec<String>,
     pub ipc_on: Vec<String>,
@@ -247,37 +263,50 @@ impl<'a> Visit<'a> for Collector {
             }
         }
         if let Some(path) = self.canonical(&call.callee) {
-            let channel = call
-                .arguments
-                .first()
-                .and_then(|arg| arg.as_expression())
-                .and_then(string_value);
-            let electron = &mut self.facts.electron;
-            if path.ends_with("ipcMain.handle") {
-                if let Some(channel) = channel.clone() {
-                    electron.ipc_handle.push(channel);
-                }
-                electron.uses_electron = true;
+            let first_argument = call.arguments.first().and_then(|arg| arg.as_expression());
+            let channel = first_argument.and_then(string_value);
+            // The five IPC entry points share one rule: a static
+            // literal channel is a fact; anything else is a
+            // dynamic site, recorded as an unknown (SPEC §9.2
+            // honesty: computed names are never silently dropped).
+            let ipc_api = if path.ends_with("ipcMain.handle") {
+                Some("ipcMain.handle")
             } else if path.ends_with("ipcMain.on") {
-                if let Some(channel) = channel.clone() {
-                    electron.ipc_on.push(channel);
-                }
-                electron.uses_electron = true;
+                Some("ipcMain.on")
             } else if path.ends_with("ipcRenderer.invoke") {
-                if let Some(channel) = channel.clone() {
-                    electron.ipc_invoke.push(channel);
-                }
-                electron.uses_electron = true;
+                Some("ipcRenderer.invoke")
             } else if path.ends_with("ipcRenderer.sendSync") {
-                if let Some(channel) = channel.clone() {
-                    electron.ipc_send_sync.push(channel);
-                }
-                electron.uses_electron = true;
+                Some("ipcRenderer.sendSync")
             } else if path.ends_with("ipcRenderer.send") {
-                if let Some(channel) = channel.clone() {
-                    electron.ipc_send.push(channel);
-                }
+                Some("ipcRenderer.send")
+            } else {
+                None
+            };
+            let electron = &mut self.facts.electron;
+            if let Some(api) = ipc_api {
                 electron.uses_electron = true;
+                match channel.clone() {
+                    Some(name) => {
+                        if api == "ipcMain.handle" {
+                            electron.ipc_handle.push(name);
+                        } else if api == "ipcMain.on" {
+                            electron.ipc_on.push(name);
+                        } else if api == "ipcRenderer.invoke" {
+                            electron.ipc_invoke.push(name);
+                        } else if api == "ipcRenderer.send" {
+                            electron.ipc_send.push(name);
+                        } else if api == "ipcRenderer.sendSync" {
+                            electron.ipc_send_sync.push(name);
+                        }
+                    }
+                    None => electron.ipc_dynamic.push(DynamicChannelSite {
+                        api: api.to_string(),
+                        expression: first_argument
+                            .map(expression_kind)
+                            .unwrap_or("no_argument")
+                            .to_string(),
+                    }),
+                }
             } else if path.ends_with("contextBridge.exposeInMainWorld") {
                 electron.uses_electron = true;
                 if let Some(name) = channel {
@@ -425,6 +454,19 @@ fn export_name(name: &ModuleExportName) -> String {
     }
 }
 
+/// Coarse shape of a channel argument the analyzer cannot
+/// resolve to a literal — enough to say *why* a dynamic site
+/// is unknown without inventing a name for it.
+fn expression_kind(expression: &Expression) -> &'static str {
+    match expression {
+        Expression::CallExpression(_) => "call",
+        Expression::Identifier(_) => "identifier",
+        Expression::StaticMemberExpression(_) | Expression::ComputedMemberExpression(_) => "member",
+        Expression::TemplateLiteral(_) => "template",
+        _ => "other",
+    }
+}
+
 fn object_entries<'a>(object: &'a ObjectExpression<'a>) -> Vec<(String, &'a Expression<'a>)> {
     let mut entries = Vec::new();
     for property in &object.properties {
@@ -471,6 +513,20 @@ fn require_source(call: &CallExpression) -> Option<String> {
 fn string_value(expression: &Expression) -> Option<String> {
     match expression {
         Expression::StringLiteral(literal) => Some(literal.value.as_str().to_string()),
+        // A template literal with no substitutions is a static
+        // literal; one with substitutions is computed and the
+        // caller records it as a dynamic site instead.
+        Expression::TemplateLiteral(template) => {
+            if template.expressions.is_empty() && template.quasis.len() == 1 {
+                template.quasis[0]
+                    .value
+                    .cooked
+                    .as_ref()
+                    .map(|cooked| cooked.as_str().to_string())
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -508,11 +564,48 @@ contextBridge.exposeInMainWorld('fixtureApi', {
 "#;
 
     #[test]
+    fn adversarial_computed_template_channel_is_an_unknown_not_a_fact() {
+        let source = "const { ipcRenderer } = require('electron'); const part = 'x'; ipcRenderer.send(`ch:${part}`);";
+        let facts = analyze_source(Path::new("a.js"), source);
+        assert!(facts.electron.ipc_send.is_empty());
+        assert_eq!(facts.electron.ipc_dynamic.len(), 1);
+        assert_eq!(facts.electron.ipc_dynamic[0].api, "ipcRenderer.send");
+        assert_eq!(facts.electron.ipc_dynamic[0].expression, "template");
+    }
+
+    #[test]
+    fn adversarial_literal_and_computed_channels_are_kept_apart() {
+        let source = "const { ipcMain, ipcRenderer } = require('electron'); const c = 'computed'; ipcMain.handle('fixture:literal', () => {}); ipcRenderer.invoke(c);";
+        let facts = analyze_source(Path::new("a.js"), source);
+        assert_eq!(
+            facts.electron.ipc_handle,
+            vec!["fixture:literal".to_string()]
+        );
+        assert!(facts.electron.ipc_invoke.is_empty());
+        assert_eq!(facts.electron.ipc_dynamic.len(), 1);
+        assert_eq!(facts.electron.ipc_dynamic[0].api, "ipcRenderer.invoke");
+        assert_eq!(facts.electron.ipc_dynamic[0].expression, "identifier");
+    }
+
+    #[test]
+    fn adversarial_non_electron_computed_call_records_nothing() {
+        let source = "const api = { send: (channel) => channel }; const c = 'x'; api.send(c);";
+        let facts = analyze_source(Path::new("a.js"), source);
+        assert!(facts.electron.ipc_dynamic.is_empty());
+        assert!(!facts.electron.uses_electron);
+    }
+
+    #[test]
     fn adversarial_non_literal_channel_is_not_a_fact() {
         let source = "const { ipcMain } = require('electron'); const c = process.env.CH; ipcMain.handle(c, () => {});";
         let facts = analyze_source(Path::new("a.js"), source);
         assert!(facts.electron.ipc_handle.is_empty());
         assert!(facts.electron.uses_electron);
+        // The site is not a fact, but it is no longer invisible:
+        // it is recorded as a dynamic (unknown) channel site.
+        assert_eq!(facts.electron.ipc_dynamic.len(), 1);
+        assert_eq!(facts.electron.ipc_dynamic[0].api, "ipcMain.handle");
+        assert_eq!(facts.electron.ipc_dynamic[0].expression, "identifier");
     }
 
     #[test]
@@ -539,6 +632,15 @@ contextBridge.exposeInMainWorld('fixtureApi', {
                 .iter()
                 .any(|fact| fact.source == "./lib/util.js")
         );
+    }
+
+    #[test]
+    fn validation_template_literal_channel_is_a_fact() {
+        let source =
+            "const { ipcMain } = require('electron'); ipcMain.handle(`fixture:tmpl`, () => {});";
+        let facts = analyze_source(Path::new("a.js"), source);
+        assert_eq!(facts.electron.ipc_handle, vec!["fixture:tmpl".to_string()]);
+        assert!(facts.electron.ipc_dynamic.is_empty());
     }
 
     #[test]
