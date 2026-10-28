@@ -34,9 +34,25 @@ pub fn inspect_artifact(_: &Registry, config: &Config, args: &Value) -> Result<V
     }
 }
 
+/// The pak footer magic (`E1 12 6F 5A`) sits at the start of
+/// the file's last 204 bytes; a pak is invisible to head
+/// classification (readers SPEC §0.4).
+const PAK_FOOTER_BYTES: usize = 204;
+const PAK_MAGIC: [u8; 4] = [0xe1, 0x12, 0x6f, 0x5a];
+
 fn inspect_file(path: &Path) -> Result<Value, FathomError> {
     let subject = subject_for_file(path)?;
     let head = read_head(path, 4096)?;
+    let mut classification = classify(&head);
+    if classification == "unknown" && subject.size_bytes >= PAK_FOOTER_BYTES as u64 {
+        // Bounded tail probe: exactly the footer size, read
+        // once, only when the head said nothing.
+        if let Ok(tail) = read_tail(path, PAK_FOOTER_BYTES)
+            && tail.starts_with(&PAK_MAGIC)
+        {
+            classification = "Unreal pak";
+        }
+    }
     let mut evidence = Evidence::new("inspect_artifact", "artifact");
     evidence.subject = Some(subject);
     evidence.coverage.examined = 1;
@@ -46,7 +62,7 @@ fn inspect_file(path: &Path) -> Result<Value, FathomError> {
         "artifact",
         Confidence::Observed,
         json!({
-            "classification": classify(&head),
+            "classification": classification,
             "kind": "file",
             "magic_prefix": head.iter().take(16)
                 .map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "),
@@ -183,6 +199,15 @@ pub fn classify(head: &[u8]) -> &'static str {
     if head.starts_with(b"GDPC") {
         return "Godot PCK";
     }
+    if head.starts_with(b"UnityFS\0") {
+        return "Unity bundle (UnityFS)";
+    }
+    if head.starts_with(b"RPA-2.0 ")
+        || head.starts_with(b"RPA-3.0 ")
+        || head.starts_with(b"RPA-3.2 ")
+    {
+        return "Ren'Py RPA";
+    }
     if head.len() >= 17
         && head[0..4] == [4, 0, 0, 0]
         && head[16] == b'{'
@@ -209,6 +234,30 @@ pub fn plist_string(plist: &str, key: &str) -> Option<String> {
     let open = rest.find("<string>")? + "<string>".len();
     let close = rest[open..].find("</string>")?;
     Some(rest[open..open + close].to_string())
+}
+
+fn read_tail(path: &Path, count: usize) -> Result<Vec<u8>, FathomError> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = fs::File::open(path).map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot open target: {e}"),
+        )
+    })?;
+    file.seek(SeekFrom::End(-(count as i64))).map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot seek target: {e}"),
+        )
+    })?;
+    let mut buffer = vec![0_u8; count];
+    file.read_exact(&mut buffer).map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot read target: {e}"),
+        )
+    })?;
+    Ok(buffer)
 }
 
 fn read_head(path: &Path, max: usize) -> Result<Vec<u8>, FathomError> {
@@ -249,6 +298,16 @@ mod tests {
         assert_eq!(classify(b"MZ"), "PE");
         assert_eq!(classify(b"PK\x03\x04rest"), "ZIP");
         assert_eq!(classify(b"GDPC\x02\0\0\0"), "Godot PCK");
+        assert_eq!(classify(b"UnityFS\0\0\0\0\x07"), "Unity bundle (UnityFS)");
+        assert_eq!(
+            classify(b"RPA-3.0 0123456789abcdef 00000000\n"),
+            "Ren'Py RPA"
+        );
+        assert_eq!(classify(b"RPA-2.0 0123456789abcdef\n"), "Ren'Py RPA");
+        assert_eq!(
+            classify(b"RPA-3.2 0123456789abcdef 00000000\n"),
+            "Ren'Py RPA"
+        );
         assert_eq!(classify(b"#!/bin/sh\n"), "script");
         assert_eq!(classify(b"plain text"), "text");
         assert_eq!(classify(&[0x00, 0x01]), "unknown");

@@ -14,6 +14,9 @@ pub mod ghidra;
 pub mod godot;
 pub mod il2cpp;
 pub mod layout;
+pub mod renpy;
+pub mod unity;
+pub mod unreal;
 
 pub use engine::locate_headless;
 
@@ -104,6 +107,45 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(godot::inspect_godot_pck),
+    );
+    registry.register(
+        descriptor(
+            "inspect_renpy_archive",
+            ToolClass::Read,
+            "renpy",
+            "Ren'Py RPA archive census (RPA-3.0 and RPA-2.0): header and key facts, \
+             a restricted data-only pickle interpreter for the index (never a real \
+             unpickler), and SHA-256 of every segment's stored bytes; the format \
+             carries no content anchor and the census says so",
+            target_schema(),
+        ),
+        Arc::new(renpy::inspect_renpy_archive),
+    );
+    registry.register(
+        descriptor(
+            "inspect_unity_bundle",
+            ToolClass::Read,
+            "unity",
+            "Unity UnityFS bundle (formats 6-8) or standalone SerializedFile \
+             (versions 9-22) census: blocks-info directory (LZ4; LZMA reported, \
+             never decoded), per-file type/object summaries with type trees \
+             skipped, and the data hash recorded as an unverified fact",
+            target_schema(),
+        ),
+        Arc::new(unity::inspect_unity_bundle),
+    );
+    registry.register(
+        descriptor(
+            "inspect_unreal_pak",
+            ToolClass::Read,
+            "unreal",
+            "Unreal Engine pak (version 11) census: footer and index SHA-1 \
+             verification, full-directory paths, encoded-entry decode cross-checked \
+             against data-area headers, stored-byte SHA-1 verification for every \
+             entry; encrypted entries are reported, never decrypted",
+            target_schema(),
+        ),
+        Arc::new(unreal::inspect_unreal_pak),
     );
     registry.register(
         descriptor(

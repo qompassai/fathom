@@ -30,6 +30,7 @@ use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::{Confidence, Evidence, Finding, sha256_hex, subject_for_file};
 use fathom_core::limits::PCK_ENTRIES_MAX;
 use fathom_core::paths;
+use fathom_core::proof;
 use fathom_core::registry::{Registry, require_str};
 
 /// Entry flag: the entry's stored bytes are encrypted.
@@ -37,8 +38,15 @@ const ENTRY_FLAG_ENCRYPTED: u32 = 1 << 0;
 /// Entry flag: the entry is a removal marker (delta packs);
 /// it carries no data in this pack.
 const ENTRY_FLAG_REMOVAL: u32 = 1 << 1;
-/// Entry flag bits this reader understands.
-const ENTRY_FLAGS_KNOWN: u32 = ENTRY_FLAG_ENCRYPTED | ENTRY_FLAG_REMOVAL;
+/// Entry flag (format 4): the entry is a binary patch against
+/// another entry for the same path (readers SPEC §3.1).
+const ENTRY_FLAG_DELTA: u32 = 1 << 2;
+/// Entry flag bits this reader understands in format 4.
+const ENTRY_FLAGS_KNOWN: u32 = ENTRY_FLAG_ENCRYPTED | ENTRY_FLAG_REMOVAL | ENTRY_FLAG_DELTA;
+/// Entry flag bits understood before format 4: the delta bit
+/// did not exist, so in a format <= 3 pack it stays an
+/// unknown-flag fact (readers SPEC §3.2).
+const ENTRY_FLAGS_KNOWN_LEGACY: u32 = ENTRY_FLAG_ENCRYPTED | ENTRY_FLAG_REMOVAL;
 
 /// Pack flag: the directory itself is encrypted.
 const PACK_FLAG_DIRECTORY_ENCRYPTED: u32 = 1 << 0;
@@ -52,7 +60,7 @@ const PACK_FLAGS_KNOWN: u32 =
     PACK_FLAG_DIRECTORY_ENCRYPTED | PACK_FLAG_RELATIVE_BASE | PACK_FLAG_SPARSE_BUNDLE;
 
 /// Newest PCK format version this reader implements.
-const FORMAT_VERSION_SUPPORTED_MAX: u32 = 3;
+const FORMAT_VERSION_SUPPORTED_MAX: u32 = 4;
 
 #[derive(Debug)]
 pub struct PckArchive {
@@ -63,6 +71,12 @@ pub struct PckArchive {
     /// Directory position for format v3; absent in v1/v2, where
     /// the directory follows the header.
     pub directory_offset: Option<u64>,
+    /// True when a format-4 header carried the 32-byte
+    /// encrypted-directory salt (directory-encrypted + sparse
+    /// bundle). Presence only: the salt serves decryption,
+    /// which is NOT-IMPLEMENTED, so its bytes are never used
+    /// or emitted (readers SPEC §3.2).
+    pub directory_salt: bool,
     pub engine_major: u32,
     pub engine_minor: u32,
     pub engine_patch: u32,
@@ -92,6 +106,11 @@ impl PckEntry {
     /// The entry's stored bytes are encrypted.
     pub fn encrypted(&self) -> bool {
         self.flags & ENTRY_FLAG_ENCRYPTED != 0
+    }
+
+    /// The entry is a format-4 delta (binary patch) entry.
+    pub fn delta(&self) -> bool {
+        self.flags & ENTRY_FLAG_DELTA != 0
     }
 
     /// The entry is a removal tombstone with no stored data.
@@ -129,6 +148,7 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
     let engine_minor = header.read_u32()?;
     let engine_patch = header.read_u32()?;
     let mut directory_offset: Option<u64> = None;
+    let mut directory_salt = false;
     let (directory_start, file_base, pack_flags) = match format_version {
         0 | 1 => {
             header.skip(64)?;
@@ -140,10 +160,22 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
             header.skip(64)?;
             (header.position, file_base, pack_flags)
         }
-        3 => {
+        3 | 4 => {
             let pack_flags = header.read_u32()?;
             let file_base = header.read_u64()?;
             let offset = header.read_u64()?;
+            // Format 4: when the pack flags carry both
+            // directory-encrypted and sparse-bundle, a 32-byte
+            // encrypted-directory salt follows the directory
+            // offset (readers SPEC §3.1 item 3). A header that
+            // ends inside the salt is truncated, as elsewhere.
+            if format_version == 4
+                && pack_flags & PACK_FLAG_DIRECTORY_ENCRYPTED != 0
+                && pack_flags & PACK_FLAG_SPARSE_BUNDLE != 0
+            {
+                header.read_bytes(32)?;
+                directory_salt = true;
+            }
             header.skip(64)?;
             directory_offset = Some(offset);
             let start = usize::try_from(offset).map_err(|_| {
@@ -163,6 +195,7 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
     let mut archive = PckArchive {
         directory_encrypted,
         directory_offset,
+        directory_salt,
         engine_major,
         engine_minor,
         engine_patch,
@@ -234,12 +267,29 @@ pub fn extract<'a>(
             "entry is a removal marker; it carries no data in this pack",
         ));
     }
+    if archive.format_version >= 4 && entry.delta() {
+        return Err(FathomError::new(
+            ErrorCode::CapabilityUnavailable,
+            "entry is a format-4 delta (patch) entry; applying it is content reconstruction, not extraction",
+        ));
+    }
     if archive.sparse_bundle {
         return Err(FathomError::new(
             ErrorCode::CapabilityUnavailable,
             "pack is a sparse bundle; entry bytes are not stored in this pack",
         ));
     }
+    stored_bytes(bytes, archive, entry)
+}
+
+/// The entry's stored byte range, bounds-checked, with no
+/// policy refusals: the census hashes delta entries' patch
+/// bytes through here even though `extract` refuses them.
+fn stored_bytes<'a>(
+    bytes: &'a [u8],
+    archive: &PckArchive,
+    entry: &PckEntry,
+) -> Result<&'a [u8], FathomError> {
     let start_u64 = stored_offset(archive, entry);
     let start = usize::try_from(start_u64)
         .ok()
@@ -270,10 +320,22 @@ pub fn inspect_godot_pck(
         )
     })?;
     let archive = parse_pck(&bytes)?;
+    let subject_sha256 = subject.sha256.clone();
     let mut evidence = Evidence::new("inspect_godot_pck", "godot");
     evidence.subject = Some(subject);
     if archive.directory_encrypted {
-        evidence.add_finding(pack_finding(&archive, 0, 0, 0, 0, 0));
+        let record = pack_record(&archive, 0, 0, 0, 0, 0, 0);
+        let document = json!({
+            "godot_pck": record.clone(),
+            "godot_pck_entries": [],
+            "godot_pck_entries_total": 0,
+            "godot_pck_entries_truncated": false,
+        });
+        let (digest, retention_note) = retain_census(config, &subject_sha256, &document);
+        evidence.add_finding(pack_finding(&archive, record, digest.as_deref()));
+        if let Some(note) = retention_note {
+            evidence.add_unknown("retention", note);
+        }
         evidence.add_unknown(
             "directory",
             "pack directory is encrypted (pack flag 0x1); the entry inventory \
@@ -284,6 +346,7 @@ pub fn inspect_godot_pck(
     }
     let total = archive.entries.len();
     let mut examined: u64 = 0;
+    let mut delta_count: u64 = 0;
     let mut encrypted_count: u64 = 0;
     let mut mismatch_paths: Vec<&str> = Vec::new();
     let mut overrun_paths: Vec<&str> = Vec::new();
@@ -293,6 +356,10 @@ pub fn inspect_godot_pck(
     for entry in &archive.entries {
         let (row, outcome) = entry_row(&bytes, &archive, entry);
         match outcome {
+            EntryOutcome::Delta => {
+                delta_count += 1;
+                examined += 1;
+            }
             EntryOutcome::Encrypted => encrypted_count += 1,
             EntryOutcome::Mismatch => {
                 // The bytes were read and examined; they are
@@ -315,14 +382,49 @@ pub fn inspect_godot_pck(
             rows.push(row);
         }
     }
-    evidence.add_finding(pack_finding(
+    let record = pack_record(
         &archive,
+        delta_count,
         encrypted_count,
         mismatch_paths.len() as u64,
         overrun_paths.len() as u64,
         removal_count,
         verified_count,
-    ));
+    );
+    // Retention (readers SPEC §2.5): the census document is
+    // the envelope's rows plus their locator keys, keyed to
+    // the container record. A retention failure degrades the
+    // run to partial; the census facts are unaffected.
+    let doc_rows: Vec<Value> = rows
+        .iter()
+        .map(|row| {
+            let mut doc_row = row.clone();
+            doc_row["key"] = row["path"].clone();
+            doc_row
+        })
+        .collect();
+    let document = json!({
+        "godot_pck": record.clone(),
+        "godot_pck_entries": doc_rows,
+        "godot_pck_entries_total": total,
+        "godot_pck_entries_truncated": total > rows.len(),
+    });
+    let (digest, retention_note) = retain_census(config, &subject_sha256, &document);
+    evidence.add_finding(pack_finding(&archive, record, digest.as_deref()));
+    if let Some(note) = retention_note {
+        evidence.add_unknown("retention", note);
+    }
+    if delta_count > 0 {
+        evidence.add_unknown(
+            "delta entries",
+            format!(
+                "{delta_count} of {total} entries are format-4 delta (patch) \
+                 entries; their directory MD5 describes the patched result, \
+                 so content verification does not apply — their rows hash \
+                 the stored patch bytes"
+            ),
+        );
+    }
     let mut entries_finding = Finding::new(
         "entries",
         Confidence::Observed,
@@ -378,8 +480,31 @@ pub fn inspect_godot_pck(
     Ok(evidence.to_value())
 }
 
+/// Retain one census document under the subject's
+/// `archive_census` export (readers SPEC §2.5). Returns the
+/// export digest on success, or a note for the envelope's
+/// unknowns on failure — retention never fails the census.
+fn retain_census(
+    config: &Config,
+    subject_sha256: &str,
+    document: &Value,
+) -> (Option<String>, Option<String>) {
+    match proof::retain_export(config, subject_sha256, "archive_census", document) {
+        Ok(digest) => (Some(digest), None),
+        Err(error) => (
+            None,
+            Some(format!(
+                "census retention failed ({}); the census facts stand, \
+                 but no proof can bind this run",
+                error.message
+            )),
+        ),
+    }
+}
+
 /// How one entry's stored bytes checked out.
 enum EntryOutcome {
+    Delta,
     Encrypted,
     Mismatch,
     Overrun,
@@ -392,7 +517,9 @@ enum EntryOutcome {
 /// row always carries the directory facts; content facts appear
 /// only when the stored bytes were actually read.
 fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, EntryOutcome) {
+    let delta = archive.format_version >= 4 && entry.delta();
     let mut row = json!({
+        "delta": delta,
         "encrypted": entry.encrypted(),
         "flags": entry.flags,
         "md5": hex_bytes(&entry.md5),
@@ -413,6 +540,22 @@ fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, En
     } else if archive.sparse_bundle {
         row["status"] = json!("sparse_bundle");
         EntryOutcome::Sparse
+    } else if delta {
+        // Delta entries: the stored bytes are patch data. The
+        // row hashes them as an observed fact about the stored
+        // bytes; the directory MD5 describes the patched
+        // result and is never checked against them.
+        match stored_bytes(bytes, archive, entry) {
+            Ok(data) => {
+                row["sha256"] = json!(sha256_hex(data));
+                row["status"] = json!("delta");
+                EntryOutcome::Delta
+            }
+            Err(_) => {
+                row["status"] = json!("unreadable");
+                EntryOutcome::Overrun
+            }
+        }
     } else {
         match extract(bytes, archive, entry) {
             Ok(data) => {
@@ -436,45 +579,56 @@ fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, En
     (row, outcome)
 }
 
-/// The pack-level summary finding: header facts and the
-/// verification census, derived from the entry records.
-fn pack_finding(
+/// The pack-level container record: header facts and the
+/// verification census, derived from the entry records. This
+/// record is what the retained census document carries
+/// (readers SPEC §2.5); the envelope finding adds the export
+/// digest to it.
+fn pack_record(
     archive: &PckArchive,
+    delta_entries: u64,
     encrypted_entries: u64,
     md5_mismatch_entries: u64,
     unreadable_entries: u64,
     removal_entries: u64,
     verified_entries: u64,
-) -> Finding {
+) -> Value {
     let total_file_bytes: u64 = archive
         .entries
         .iter()
         .filter(|entry| !entry.removal())
         .map(|entry| entry.size)
         .sum();
-    let mut finding = Finding::new(
-        "godot_pck",
-        Confidence::Observed,
-        json!({
-            "declared_entries": archive.entries.len(),
-            "directory_encrypted": archive.directory_encrypted,
-            "directory_offset": archive.directory_offset,
-            "encrypted_entries": encrypted_entries,
-            "engine_major": archive.engine_major,
-            "engine_minor": archive.engine_minor,
-            "engine_patch": archive.engine_patch,
-            "file_base": archive.file_base,
-            "format_version": archive.format_version,
-            "md5_mismatch_entries": md5_mismatch_entries,
-            "pack_flags": archive.pack_flags,
-            "relative_base": archive.pack_flags & PACK_FLAG_RELATIVE_BASE != 0,
-            "removal_entries": removal_entries,
-            "sparse_bundle": archive.sparse_bundle,
-            "total_file_bytes": total_file_bytes,
-            "unreadable_entries": unreadable_entries,
-            "verified_entries": verified_entries,
-        }),
-    );
+    json!({
+        "declared_entries": archive.entries.len(),
+        "delta_entries": delta_entries,
+        "directory_encrypted": archive.directory_encrypted,
+        "directory_offset": archive.directory_offset,
+        "directory_salt": archive.directory_salt,
+        "encrypted_entries": encrypted_entries,
+        "engine_major": archive.engine_major,
+        "engine_minor": archive.engine_minor,
+        "engine_patch": archive.engine_patch,
+        "file_base": archive.file_base,
+        "format_version": archive.format_version,
+        "md5_mismatch_entries": md5_mismatch_entries,
+        "pack_flags": archive.pack_flags,
+        "relative_base": archive.pack_flags & PACK_FLAG_RELATIVE_BASE != 0,
+        "removal_entries": removal_entries,
+        "sparse_bundle": archive.sparse_bundle,
+        "total_file_bytes": total_file_bytes,
+        "unreadable_entries": unreadable_entries,
+        "verified_entries": verified_entries,
+    })
+}
+
+fn pack_finding(archive: &PckArchive, record: Value, export_digest: Option<&str>) -> Finding {
+    let mut facts = record;
+    facts["export_digest"] = match export_digest {
+        Some(digest) => json!(digest),
+        None => Value::Null,
+    };
+    let mut finding = Finding::new("godot_pck", Confidence::Observed, facts);
     if archive.pack_flags & PACK_FLAG_RELATIVE_BASE != 0 {
         finding = finding.with_limitation(
             "pack declares a relative file base (embedded layout); entry \
@@ -490,10 +644,15 @@ fn pack_finding(
              they are reported, not interpreted"
         ));
     }
+    let entry_flags_known = if archive.format_version >= 4 {
+        ENTRY_FLAGS_KNOWN
+    } else {
+        ENTRY_FLAGS_KNOWN_LEGACY
+    };
     if archive
         .entries
         .iter()
-        .any(|entry| entry.flags & !ENTRY_FLAGS_KNOWN != 0)
+        .any(|entry| entry.flags & !entry_flags_known != 0)
     {
         finding = finding.with_limitation(
             "one or more entries declare unrecognised flag bits; the raw \
@@ -655,9 +814,16 @@ mod tests {
         pack_flags: u32,
         files: &[(&str, &[u8], u32)],
     ) -> (Vec<u8>, Vec<usize>) {
+        // Format 4 with an encrypted + sparse directory
+        // carries the 32-byte salt after the directory offset
+        // field, before the 64 reserved bytes.
+        let salt = format_version == 4
+            && pack_flags & PACK_FLAG_DIRECTORY_ENCRYPTED != 0
+            && pack_flags & PACK_FLAG_SPARSE_BUNDLE != 0;
         let header_len: usize = match format_version {
             0 | 1 => 84,
             2 => 96,
+            _ if salt => 136,
             _ => 104,
         };
         let padded_len = |path: &str| path.len() + (4 - path.len() % 4) % 4;
@@ -669,7 +835,7 @@ mod tests {
             .map(|(path, _, _)| entry_len(path))
             .sum::<usize>();
         let data_start = match format_version {
-            3 => header_len.div_ceil(32) * 32,
+            3.. => header_len.div_ceil(32) * 32,
             2 => (header_len + directory_len).div_ceil(32) * 32,
             _ => header_len + directory_len,
         };
@@ -691,12 +857,12 @@ mod tests {
         } else {
             0
         };
-        let directory_start = if format_version == 3 {
+        let directory_start = if format_version >= 3 {
             cursor
         } else {
             header_len
         };
-        let total_len = if format_version == 3 {
+        let total_len = if format_version >= 3 {
             directory_start + directory_len
         } else {
             cursor
@@ -1190,6 +1356,160 @@ mod tests {
         let directory_offset = archive.directory_offset.expect("v3 directory offset");
         // The directory sits after the file data in a v3 pack.
         assert!(directory_offset > stored_offset(&archive, &archive.entries[1]));
+        assert_eq!(archive.entries.len(), 2);
+        assert_eq!(
+            extract(&bytes, &archive, &archive.entries[0]).unwrap(),
+            b"extends Node\n"
+        );
+        assert_eq!(
+            extract(&bytes, &archive, &archive.entries[1]).unwrap(),
+            &[1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn adversarial_v4_header_truncated_inside_salt() {
+        let (bytes, _) = build_pack(
+            4,
+            PACK_FLAG_DIRECTORY_ENCRYPTED | PACK_FLAG_SPARSE_BUNDLE,
+            &[("res://a.txt", b"x", 0)],
+        );
+        // The salt occupies bytes 40..72; 60 ends inside it.
+        let err = parse_pck(&bytes[..60]).unwrap_err();
+        assert_eq!(err.code, ErrorCode::Truncated);
+    }
+
+    #[test]
+    fn adversarial_v5_refusal_names_the_new_supported_set() {
+        let (mut bytes, _) = build_pack(2, 0, &[("res://a.txt", b"hello", 0)]);
+        write_u32(&mut bytes, 4, 5);
+        let err = parse_pck(&bytes).unwrap_err();
+        assert_eq!(err.code, ErrorCode::UnsupportedTarget);
+        assert!(err.message.contains("format version 5"), "{}", err.message);
+        assert!(err.message.contains("1, 2, 4"), "{}", err.message);
+    }
+
+    #[test]
+    fn validation_delta_bit_in_v3_is_an_unknown_flag_not_a_delta() {
+        let (bytes, _) = build_pack(3, 0, &[("res://a.txt", b"hello", ENTRY_FLAG_DELTA)]);
+        let (root, value) = run_inspect("v3-delta-bit", &bytes);
+        let rows = entry_rows(&value);
+        // The bit did not exist in format 3: the entry reads
+        // as an ordinary verified entry, and the flag is
+        // reported as unrecognised for this version.
+        assert_eq!(rows[0]["delta"], false);
+        assert_eq!(rows[0]["status"], "verified");
+        let finding = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "godot_pck")
+            .expect("godot_pck finding");
+        assert!(
+            finding["limitations"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|text| text.as_str().unwrap().contains("unrecognised flag bits"))
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_v4_delta_entry_hashes_patch_bytes_never_md5() {
+        let (bytes, _) = build_pack(
+            4,
+            0,
+            &[
+                ("res://main.gd", b"extends Node\n", 0),
+                ("res://main.gd", b"PATCH!", ENTRY_FLAG_DELTA),
+            ],
+        );
+        let archive = parse_pck(&bytes).unwrap();
+        assert_eq!(archive.format_version, 4);
+        // extract() refuses delta entries: applying a patch
+        // is content reconstruction.
+        let err = extract(&bytes, &archive, &archive.entries[1]).unwrap_err();
+        assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
+        let (root, value) = run_inspect("v4-delta", &bytes);
+        let rows = entry_rows(&value);
+        assert_eq!(rows[0]["status"], "verified");
+        assert_eq!(rows[1]["status"], "delta");
+        assert_eq!(rows[1]["delta"], true);
+        // The gate failure this test exists to catch: a delta
+        // entry reported as MD5-verified.
+        assert_eq!(rows[1]["md5_verified"], Value::Null);
+        assert_eq!(rows[1]["sha256"], json!(sha256_hex(b"PATCH!")));
+        assert_eq!(pack_facts(&value)["delta_entries"], 1);
+        assert_eq!(pack_facts(&value)["format_version"], 4);
+        assert!(
+            value["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|unknown| unknown["aspect"] == "delta entries")
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_v4_retention_document_is_written() {
+        let (bytes, _) = build_pack(4, 0, &[("res://a.txt", b"hello", 0)]);
+        let (root, value) = run_inspect("v4-retention", &bytes);
+        let digest = pack_facts(&value)["export_digest"]
+            .as_str()
+            .expect("export_digest fact")
+            .to_string();
+        assert_eq!(digest.len(), 64);
+        // The retained document lives at the §4.1 store path
+        // for (subject, "archive_census") and digests to the
+        // reported value.
+        let subject_sha = sha256_hex(&bytes);
+        let path = root
+            .join("state")
+            .join("ghidra")
+            .join(&subject_sha[..32])
+            .join("export-archive_census.json");
+        let document: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(fathom_core::proof::value_digest(&document), digest);
+        assert_eq!(document["godot_pck"]["format_version"], 4);
+        assert_eq!(document["godot_pck_entries"][0]["key"], "res://a.txt");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_v4_sparse_encrypted_directory_carries_salt() {
+        let (bytes, _) = build_pack(
+            4,
+            PACK_FLAG_DIRECTORY_ENCRYPTED | PACK_FLAG_SPARSE_BUNDLE,
+            &[("res://a.txt", b"x", 0)],
+        );
+        let archive = parse_pck(&bytes).unwrap();
+        assert!(archive.directory_encrypted);
+        assert!(archive.directory_salt);
+        let (root, value) = run_inspect("v4-salt", &bytes);
+        assert_eq!(pack_facts(&value)["directory_salt"], true);
+        assert_eq!(pack_facts(&value)["declared_entries"], 0);
+        // Retention succeeded; the only unknown is the
+        // encrypted directory itself.
+        assert_eq!(value["unknowns"].as_array().unwrap().len(), 1);
+        assert_eq!(value["unknowns"][0]["aspect"], "directory");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_v4_roundtrip_entries_and_extract() {
+        let (bytes, _) = build_pack(
+            4,
+            0,
+            &[
+                ("res://main.gd", b"extends Node\n", 0),
+                ("res://data.bin", &[1, 2, 3, 4], 0),
+            ],
+        );
+        let archive = parse_pck(&bytes).unwrap();
+        assert_eq!(archive.format_version, 4);
+        assert!(!archive.directory_salt);
         assert_eq!(archive.entries.len(), 2);
         assert_eq!(
             extract(&bytes, &archive, &archive.entries[0]).unwrap(),
