@@ -17,8 +17,8 @@ use crate::config::Config;
 use crate::error::{ErrorCode, FathomError};
 use crate::evidence::{Confidence, sha256_hex};
 use crate::limits::{
-    PROOF_BYTES_MAX, PROOF_CLAIMS_MAX, PROOF_DIAGNOSTIC_CHARS_MAX, PROOF_EVIDENCE_PER_CLAIM_MAX,
-    PROOF_STATEMENT_BYTES_MAX,
+    ARCHIVE_EXPORT_BYTES_MAX, PROOF_BYTES_MAX, PROOF_CLAIMS_MAX, PROOF_DIAGNOSTIC_CHARS_MAX,
+    PROOF_EVIDENCE_PER_CLAIM_MAX, PROOF_STATEMENT_BYTES_MAX,
 };
 use crate::paths;
 use crate::registry::Registry;
@@ -135,6 +135,7 @@ fn parse_confidence(raw: &str) -> Option<Confidence> {
 /// amendment, not by caller invention.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClaimClass {
+    ArchiveEntry,
     ArtifactClassification,
     CallRelationship,
     Coverage,
@@ -146,6 +147,7 @@ pub enum ClaimClass {
 impl ClaimClass {
     pub fn parse(raw: &str) -> Option<Self> {
         match raw {
+            "archive_entry" => Some(ClaimClass::ArchiveEntry),
             "artifact_classification" => Some(ClaimClass::ArtifactClassification),
             "call_relationship" => Some(ClaimClass::CallRelationship),
             "coverage" => Some(ClaimClass::Coverage),
@@ -158,6 +160,7 @@ impl ClaimClass {
 
     pub fn as_str(self) -> &'static str {
         match self {
+            ClaimClass::ArchiveEntry => "archive_entry",
             ClaimClass::ArtifactClassification => "artifact_classification",
             ClaimClass::CallRelationship => "call_relationship",
             ClaimClass::Coverage => "coverage",
@@ -173,6 +176,7 @@ impl ClaimClass {
     /// defined strings are `observed`, data strings `derived`.
     pub fn confidence(self, inventories: &[&str]) -> Confidence {
         match self {
+            ClaimClass::ArchiveEntry => Confidence::Observed,
             ClaimClass::ArtifactClassification => Confidence::Observed,
             ClaimClass::CallRelationship => Confidence::Derived,
             ClaimClass::Coverage => Confidence::Observed,
@@ -413,6 +417,86 @@ fn parse_ref(raw: &Value) -> EvidenceRef {
     }
 }
 
+/// Which retained-document family a resolution runs against,
+/// chosen by the proof's export mode: `overview`, a per-function
+/// dossier (`function…`), or an archive census
+/// (`archive_census`, readers SPEC §2.5).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DocKind {
+    Archive,
+    Dossier,
+    Overview,
+}
+
+fn doc_kind(export_mode: &str) -> DocKind {
+    match export_mode {
+        "archive_census" => DocKind::Archive,
+        "overview" => DocKind::Overview,
+        _ => DocKind::Dossier,
+    }
+}
+
+/// The container inventories of an archive census document:
+/// single records addressed by the key `container`.
+const ARCHIVE_CONTAINER_INVENTORIES: [&str; 4] =
+    ["godot_pck", "renpy_rpa", "unity_bundle", "unreal_pak"];
+
+/// The row inventories of an archive census document: arrays
+/// whose rows carry their `(inventory, key)` locator in a
+/// `key` field, with `<inventory>_total` and
+/// `<inventory>_truncated` siblings (readers SPEC §2.5).
+const ARCHIVE_ROW_INVENTORIES: [&str; 6] = [
+    "godot_pck_entries",
+    "renpy_rpa_entries",
+    "unity_bundle_entries",
+    "unity_serialized",
+    "unity_serialized_objects",
+    "unreal_pak_entries",
+];
+
+fn find_by_key(document: &Value, field: &str, truncated_field: &str, key: &str) -> Resolution {
+    let rows = document.get(field).and_then(Value::as_array);
+    if let Some(rows) = rows {
+        for row in rows {
+            if row.get("key").and_then(Value::as_str) == Some(key) {
+                return Resolution::Record(row.clone());
+            }
+        }
+    }
+    let truncated = document
+        .get(truncated_field)
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if truncated {
+        Resolution::BeyondCeiling
+    } else {
+        Resolution::Absent
+    }
+}
+
+fn resolve_archive(document: &Value, inventory: &str, key: &str) -> Resolution {
+    if inventory == "coverage" {
+        return match coverage_record(document, key) {
+            Some(record) => Resolution::Record(record),
+            None => Resolution::NotApplicable,
+        };
+    }
+    if ARCHIVE_CONTAINER_INVENTORIES.contains(&inventory) {
+        if key != "container" {
+            return Resolution::Absent;
+        }
+        return match document.get(inventory) {
+            Some(record) => Resolution::Record(record.clone()),
+            None => Resolution::Absent,
+        };
+    }
+    if ARCHIVE_ROW_INVENTORIES.contains(&inventory) {
+        let truncated_field = format!("{inventory}_truncated");
+        return find_by_key(document, inventory, &truncated_field, key);
+    }
+    Resolution::NotApplicable
+}
+
 /// How one `(inventory, key)` locator resolves in a retained
 /// export document.
 #[derive(Clone, Debug)]
@@ -437,6 +521,21 @@ pub fn resolve_record(document: &Value, dossier: bool, inventory: &str, key: &st
         resolve_dossier(document, inventory, key)
     } else {
         resolve_overview(document, inventory, key)
+    }
+}
+
+/// Resolve a locator against a retained document of the family
+/// the export mode names (overview, dossier, or archive census).
+pub fn resolve_record_for_mode(
+    document: &Value,
+    export_mode: &str,
+    inventory: &str,
+    key: &str,
+) -> Resolution {
+    match doc_kind(export_mode) {
+        DocKind::Archive => resolve_archive(document, inventory, key),
+        DocKind::Dossier => resolve_dossier(document, inventory, key),
+        DocKind::Overview => resolve_overview(document, inventory, key),
     }
 }
 
@@ -557,6 +656,38 @@ fn coverage_record(document: &Value, inventory: &str) -> Option<Value> {
         "functions" => ("functions", "functions_total", "functions_truncated"),
         "names" => ("symbols", "symbols_total", "symbols_truncated"),
         "strings" => ("strings", "strings_total", "strings_truncated"),
+        // Archive census inventories (readers SPEC §2.5): the
+        // field, total, and truncation names share the stem.
+        "godot_pck_entries" => (
+            "godot_pck_entries",
+            "godot_pck_entries_total",
+            "godot_pck_entries_truncated",
+        ),
+        "renpy_rpa_entries" => (
+            "renpy_rpa_entries",
+            "renpy_rpa_entries_total",
+            "renpy_rpa_entries_truncated",
+        ),
+        "unity_bundle_entries" => (
+            "unity_bundle_entries",
+            "unity_bundle_entries_total",
+            "unity_bundle_entries_truncated",
+        ),
+        "unity_serialized" => (
+            "unity_serialized",
+            "unity_serialized_total",
+            "unity_serialized_truncated",
+        ),
+        "unity_serialized_objects" => (
+            "unity_serialized_objects",
+            "unity_serialized_objects_total",
+            "unity_serialized_objects_truncated",
+        ),
+        "unreal_pak_entries" => (
+            "unreal_pak_entries",
+            "unreal_pak_entries_total",
+            "unreal_pak_entries_truncated",
+        ),
         _ => return None,
     };
     let retained = document
@@ -664,15 +795,23 @@ pub fn verify_claims(proof: &Proof, export: Option<&Value>) -> Vec<ClaimOutcome>
             })
             .collect();
     };
-    let dossier = proof.export_mode != "overview";
+    let kind = doc_kind(&proof.export_mode);
     proof
         .claims
         .iter()
-        .map(|claim| check_claim(claim, document, dossier))
+        .map(|claim| check_claim(claim, document, kind))
         .collect()
 }
 
-fn check_claim(claim: &Claim, document: &Value, dossier: bool) -> ClaimOutcome {
+fn kind_mode(kind: DocKind) -> &'static str {
+    match kind {
+        DocKind::Archive => "archive_census",
+        DocKind::Dossier => "function",
+        DocKind::Overview => "overview",
+    }
+}
+
+fn check_claim(claim: &Claim, document: &Value, kind: DocKind) -> ClaimOutcome {
     // Rule 2: bound evidence, or the claim fails. This is the
     // contract's center — an ID-array-only claim verifies
     // nothing, however plausible its identifiers look.
@@ -723,7 +862,7 @@ fn check_claim(claim: &Claim, document: &Value, dossier: bool) -> ClaimOutcome {
     // field-by-field against the bound records.
     let mut records: Vec<Value> = Vec::with_capacity(locators.len());
     for (inventory, key, record_digest) in &locators {
-        match resolve_record(document, dossier, inventory, key) {
+        match resolve_record_for_mode(document, kind_mode(kind), inventory, key) {
             Resolution::Record(record) => {
                 if value_digest(&record) != *record_digest {
                     return outcome(
@@ -862,6 +1001,48 @@ pub fn retained_export_path(config: &Config, subject_sha256: &str, mode: &str) -
 pub fn read_retained_export(config: &Config, subject_sha256: &str, mode: &str) -> Option<Value> {
     let bytes = std::fs::read(retained_export_path(config, subject_sha256, mode)).ok()?;
     serde_json::from_slice(&bytes).ok()
+}
+
+/// Retain one export document for (subject, mode) in the
+/// retained-evidence store, in canonical form, returning its
+/// digest. The archive readers retain their censuses this way
+/// (mode `archive_census`, readers SPEC §2.5); a document over
+/// `ARCHIVE_EXPORT_BYTES_MAX` is a `resource_constraint`
+/// refusal and the caller degrades its run, never the census.
+pub fn retain_export(
+    config: &Config,
+    subject_sha256: &str,
+    mode: &str,
+    document: &Value,
+) -> Result<String, FathomError> {
+    let canonical = canonical_json(document);
+    if canonical.len() > ARCHIVE_EXPORT_BYTES_MAX {
+        return Err(FathomError::new(
+            ErrorCode::ResourceConstraint,
+            format!(
+                "retained document exceeds ARCHIVE_EXPORT_BYTES_MAX ({ARCHIVE_EXPORT_BYTES_MAX}) canonical bytes"
+            ),
+        ));
+    }
+    let path = retained_export_path(config, subject_sha256, mode);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            FathomError::new(
+                ErrorCode::ExecutionFailure,
+                format!(
+                    "cannot create retained-evidence dir {}: {error}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    std::fs::write(&path, canonical.as_bytes()).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ExecutionFailure,
+            format!("cannot retain export {}: {error}", path.display()),
+        )
+    })?;
+    Ok(value_digest(document))
 }
 
 /// The directory one subject's proofs live in (SPEC §4.1.10).
@@ -1278,6 +1459,122 @@ mod tests {
             &json!({"catalog_digest": "a", "source_revision": "r1", "version": "1"}),
             &json!({"catalog_digest": "a", "source_revision": "r2", "version": "1"}),
         ));
+    }
+
+    /// A small retained archive census document (readers
+    /// SPEC §2.5): one container record, two entry rows.
+    fn census_document() -> Value {
+        json!({
+            "godot_pck": {"declared_entries": 2, "format_version": 4},
+            "godot_pck_entries": [
+                {"key": "res://a.txt", "md5": "0cc175b9c0f1b6a831c399e269772661",
+                 "offset": 128, "path": "res://a.txt",
+                 "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+                 "size": 1},
+                {"key": "res://b.txt", "md5": "900150983cd24fb0d6963f7d28e17f72",
+                 "offset": 160, "path": "res://b.txt", "sha256": null, "size": 3},
+            ],
+            "godot_pck_entries_total": 2,
+            "godot_pck_entries_truncated": false,
+        })
+    }
+
+    fn census_proof(document: &Value, claims: Vec<Value>) -> Proof {
+        let mut value = json!({
+            "claims": claims,
+            "export": {"digest": value_digest(document), "mode": "archive_census"},
+            "producer": {
+                "catalog_digest": "c".repeat(64),
+                "provider": "ghidra",
+                "server": "fathom",
+                "source_revision": "test",
+                "version": "0.0.0",
+            },
+            "proof_version": 1,
+            "subject": {"path": "/fixtures/game.pck", "sha256": "b".repeat(64), "size_bytes": 300},
+        });
+        let digest = compute_proof_digest(&value);
+        value["proof_digest"] = json!(digest);
+        parse_proof(&value).expect("census proof parses")
+    }
+
+    #[test]
+    fn validation_archive_entry_claim_verifies_against_census() {
+        let document = census_document();
+        let record = match resolve_record_for_mode(
+            &document,
+            "archive_census",
+            "godot_pck_entries",
+            "res://a.txt",
+        ) {
+            Resolution::Record(record) => record,
+            other => panic!("entry must resolve, got {other:?}"),
+        };
+        let claim = json!({
+            "claim_id": "a1",
+            "class": "archive_entry",
+            "confidence": "observed",
+            "evidence": [{
+                "inventory": "godot_pck_entries",
+                "key": "res://a.txt",
+                "record_digest": value_digest(&record),
+            }],
+            "statement": {"path": "res://a.txt", "size": 1,
+                "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb"},
+        });
+        let proof = census_proof(&document, vec![claim]);
+        let outcomes = verify_claims(&proof, Some(&document));
+        assert_eq!(outcomes[0].outcome, Outcome::Verified);
+        // The container record resolves under the container key.
+        assert!(matches!(
+            resolve_record_for_mode(&document, "archive_census", "godot_pck", "container"),
+            Resolution::Record(_)
+        ));
+        // Coverage over an archive inventory synthesizes counts.
+        let coverage = match resolve_record_for_mode(
+            &document,
+            "archive_census",
+            "coverage",
+            "godot_pck_entries",
+        ) {
+            Resolution::Record(record) => record,
+            other => panic!("coverage must resolve, got {other:?}"),
+        };
+        assert_eq!(coverage["exhaustive"], true);
+        assert_eq!(coverage["total"], 2);
+    }
+
+    #[test]
+    fn adversarial_archive_claim_asserting_unretained_hash_fails() {
+        // The b.txt record carries sha256: null (unverified
+        // entry); a claim asserting a content hash for it is a
+        // contradiction, not a partial pass (readers SPEC §3.4).
+        let document = census_document();
+        let record = match resolve_record_for_mode(
+            &document,
+            "archive_census",
+            "godot_pck_entries",
+            "res://b.txt",
+        ) {
+            Resolution::Record(record) => record,
+            other => panic!("entry must resolve, got {other:?}"),
+        };
+        let claim = json!({
+            "claim_id": "a1",
+            "class": "archive_entry",
+            "confidence": "observed",
+            "evidence": [{
+                "inventory": "godot_pck_entries",
+                "key": "res://b.txt",
+                "record_digest": value_digest(&record),
+            }],
+            "statement": {"path": "res://b.txt",
+                "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+        });
+        let proof = census_proof(&document, vec![claim]);
+        let outcomes = verify_claims(&proof, Some(&document));
+        assert_eq!(outcomes[0].outcome, Outcome::Failed);
+        assert!(outcomes[0].diagnostic.starts_with("statement_contradicted"));
     }
 
     #[test]

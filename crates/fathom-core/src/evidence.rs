@@ -152,6 +152,12 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 
 /// Hash a file by streaming it, enforcing the target size bound.
 pub fn hash_file(path: &Path) -> Result<(String, u64), FathomError> {
+    hash_file_with_bound(path, TARGET_BYTES_MAX)
+}
+
+/// Hash a file by streaming it, enforcing a caller-named size
+/// bound (the archive readers pass `ARCHIVE_TARGET_BYTES_MAX`).
+pub fn hash_file_with_bound(path: &Path, bound: u64) -> Result<(String, u64), FathomError> {
     let mut file = std::fs::File::open(path).map_err(|e| {
         FathomError::new(
             ErrorCode::TargetUnavailable,
@@ -172,10 +178,10 @@ pub fn hash_file(path: &Path) -> Result<(String, u64), FathomError> {
             break;
         }
         total += read as u64;
-        if total > TARGET_BYTES_MAX {
+        if total > bound {
             return Err(FathomError::new(
                 ErrorCode::ResourceConstraint,
-                format!("target exceeds {TARGET_BYTES_MAX} bytes"),
+                format!("target exceeds {bound} bytes"),
             )
             .with_target(path.display().to_string()));
         }
@@ -191,7 +197,14 @@ pub fn hash_file(path: &Path) -> Result<(String, u64), FathomError> {
 
 /// Build the [`Subject`] for a file target.
 pub fn subject_for_file(path: &Path) -> Result<Subject, FathomError> {
-    let (sha256, size_bytes) = hash_file(path)?;
+    subject_for_file_with_bound(path, TARGET_BYTES_MAX)
+}
+
+/// Build the [`Subject`] for a file target under a caller-named
+/// size bound (the archive readers pass
+/// `ARCHIVE_TARGET_BYTES_MAX`).
+pub fn subject_for_file_with_bound(path: &Path, bound: u64) -> Result<Subject, FathomError> {
+    let (sha256, size_bytes) = hash_file_with_bound(path, bound)?;
     Ok(Subject {
         path: path.display().to_string(),
         sha256,
