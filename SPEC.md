@@ -111,11 +111,14 @@ Tools (alphabetical; status = this run):
 | `inspect_android_apk` | read | android | built (ZIP64 + DEX/arsc decode are named walls) |
 | `inspect_artifact` | read | artifact | built |
 | `inspect_asar` | read | js | built |
+| `inspect_beam_module` | read | beam | built (opcode decode NOT-IMPLEMENTED; inventory is chunk/table-level) |
 | `inspect_binary_layout` | read | native-layout | built |
 | `inspect_evm_bytecode` | read | evm | built (interface inference scaffolded) |
 | `inspect_firmware` | read | firmware | built (signature scan; no extraction) |
 | `inspect_godot_pck` | read | godot | built (decryption NOT-IMPLEMENTED; encrypted entries are unknowns) |
-| `inspect_managed_assembly` | read | managed | built (CIL decode scaffolded) |
+| `inspect_gpu_code_object` | read | gpu | built (GPU ISA disassembly NOT-IMPLEMENTED; kernels and metadata are inventoried) |
+| `inspect_managed_assembly` | read | managed | built (CIL decode scaffolded; NativeAOT screen built — marker-derived classification, NativeFormat graph NOT-IMPLEMENTED) |
+| `inspect_python_artifact` | read | python | built (bytecode instruction decode NOT-IMPLEMENTED; .pyc code-tree and PyInstaller/PYZ censuses are built) |
 | `inspect_source_map` | read | js | built |
 | `inspect_web_capture` | read | web | built |
 | `list_functions` | read | ghidra | built |
@@ -717,6 +720,10 @@ pinned in `Cargo.lock` and built offline thereafter.
 | SHA-1 (Unreal pak anchors) | sha1 0.11 (RustCrypto); hand-rolled | **Adopt sha1 0.11** as a workspace dependency for `fathom-native`. The tree already trusts this family (`sha2` 0.11); hand-rolling a second hash invites divergence. |
 | Zlib (RPA index; pak blocks) | flate2 (already a workspace dependency) | **Reuse flate2** — add to `fathom-native`'s manifest. Already adopted and locked; decompression is always bounded-output. |
 | Godot PCK | the format itself (Godot engine reader layout) | **Implement directly.** GDPC header + directory parse for format versions 1–3; every readable entry is SHA-256-hashed and cross-checked against the MD5 the directory declares (hand-rolled RFC 1321 implementation, public test vectors). Decryption is NOT-IMPLEMENTED: encrypted directories and entries are reported as unknowns, never skipped. |
+| Python .pyc + PyInstaller (S5) | the formats themselves (PEP 552; CPython marshal; PyInstaller CArchive/PYZ) | **Implement directly.** .pyc: header facts plus the code-object tree via a bounded hand-rolled marshal reader (marshal writes code-object scalars as raw i32s — readers that treat them as tagged values desynchronise; the reader is field-kind-aware per version layout, 2.7/3.0–3.7/3.8–3.10/3.11–3.13, unknown magics refused by name). PyInstaller: cookie located at EOF or by bounded tail scan, TOC census with stored-byte SHA-256, nested PYZ module census (both TOC shapes read: dict and list-of-pairs). Fixtures are genuine: a CPython 3.12-compiled module and an archive written by PyInstaller 6.22's own writers. Instruction decode is NOT-IMPLEMENTED. |
+| BEAM (S6) | the format itself (IFF/ERTS beam file format) | **Implement directly.** Chunk inventory; Atom/AtU8 atom table; ImpT/ExpT/LocT/FunT function tables resolved through the atom table (unresolved indexes are kept rows, never dropped); Code header cross-checked against the tables; LitT decompressed and walked with a bounded external-term reader (atoms censused, terms counted, never materialised). Opcode-stream decode is NOT-IMPLEMENTED: opcode tables are instruction-set-versioned and a wrong table would fabricate facts. |
+| GPU code objects (S7) | the formats themselves (ELF/AMDGPU ABI; Clang offload bundle) | **Implement directly** over goblin's ELF reader. Standalone AMDGPU code objects (target from e_flags, kernel symbols + `.kd` descriptor presence, NT_AMDGPU_METADATA note decoded with a bounded hand-rolled MessagePack reader; YAML v2 metadata reduced to kernel names), standalone offload bundles, and host binaries with bundles embedded (bounded magic scan). GPU ISA disassembly is NOT-IMPLEMENTED. |
+| NativeAOT (S8) | the PE format + NativeAOT runtime traces | **Screen, honestly labelled.** No ECMA-335 metadata exists to parse: classification is marker-derived (≥2 distinct System.Private.* component strings plus a runtime-helper export or a third component; Derived confidence), with section/export inventories and a dotted-string census. The NativeFormat metadata graph reader is NOT-IMPLEMENTED, gated on a real NativeAOT fixture (no .NET SDK exists on estate machines to produce one). |
 | Process capture | portable-pty (PTY); std::process pipes | **Pipes in this run** (output, exit, timing, hashes). PTY support is scaffolded; upstream's interactive PTY scenarios are named NOT-IMPLEMENTED until portable-pty is adopted. |
 | HAR reading | serde_json over the HAR 1.2 schema | **Implement directly**; no crate needed. |
 | EVM | EVMole as WASM (upstream's route); hand analysis | **Hand analysis** for the dispatcher/selector slice, findings marked `inferred`. Interface reconstruction beyond selectors is scaffolded. |
