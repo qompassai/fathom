@@ -838,9 +838,13 @@ Deterministic, fail-closed, evaluated before every handler:
   names, never from target-supplied paths.
 - **Bounds.** Named constants, enforced before the costly step:
   max target bytes, max file count per inventory, max decompile
-  bytes, max captured output bytes, provider timeout (default
-  330 s for Ghidra, matching upstream's startup deadline scale),
-  max ASAR entries, max PCK entries. A bound hit is
+  bytes, max captured output bytes, Ghidra provider timeouts
+  (330 s for a run against an already-imported project, matching
+  upstream's startup deadline scale; 1800 s for a first import,
+  whose full auto-analysis of a large debug binary is measured
+  in tens of minutes — a 76 MB Rust debug ELF took 1128 s on
+  primo; the split is Owner ruling D-241, 2026-10-28), max ASAR
+  entries, max PCK entries. A bound hit is
   `resource_constraint` or a reported truncation — never an
   unbounded retry.
 - **Processes.** Providers run only owned child processes, in

@@ -14,7 +14,9 @@ use std::path::{Path, PathBuf};
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::sha256_hex;
-use fathom_core::limits::{GHIDRA_TIMEOUT_SECS, OUTPUT_BYTES_MAX};
+use fathom_core::limits::{
+    GHIDRA_FIRST_IMPORT_TIMEOUT_SECS, GHIDRA_TIMEOUT_SECS, OUTPUT_BYTES_MAX,
+};
 use fathom_core::paths;
 use fathom_core::process::{ProcessSpec, run};
 
@@ -93,6 +95,18 @@ fn ghidra_unusable_path_element(path: &Path) -> Option<String> {
     None
 }
 
+/// The provider bound for one headless run, seconds. A first
+/// import runs full auto-analysis and gets the first-import
+/// bound; a run against an already-imported project only
+/// re-exports and keeps the default bound (SPEC §8, D-241).
+fn provider_timeout_secs(first_import: bool) -> u64 {
+    if first_import {
+        GHIDRA_FIRST_IMPORT_TIMEOUT_SECS
+    } else {
+        GHIDRA_TIMEOUT_SECS
+    }
+}
+
 /// Run (or reuse) the export for one subject and mode.
 pub fn run_export(
     config: &Config,
@@ -166,14 +180,18 @@ pub fn run_export(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "program".to_string());
+    // The project's presence is the first-import distinction: no
+    // `.gpr` yet means this run pays full auto-analysis, which is
+    // what the first-import bound exists for (D-241).
+    let first_import = !project_dir.join("fathom.gpr").exists();
     let mut args: Vec<String> = vec![project_dir.display().to_string(), "fathom".to_string()];
-    if project_dir.join("fathom.gpr").exists() {
+    if first_import {
+        args.push("-import".to_string());
+        args.push(subject.display().to_string());
+    } else {
         args.push("-process".to_string());
         args.push(program_name);
         args.push("-noanalysis".to_string());
-    } else {
-        args.push("-import".to_string());
-        args.push(subject.display().to_string());
     }
     args.push("-scriptPath".to_string());
     args.push(script_dir.display().to_string());
@@ -184,17 +202,18 @@ pub fn run_export(
     if let Some(name) = target {
         args.push(name.to_string());
     }
+    let timeout_secs = provider_timeout_secs(first_import);
     let outcome = run(&ProcessSpec {
         args,
         cwd: Some(cache_dir.clone()),
         env: Vec::new(),
         output_cap: OUTPUT_BYTES_MAX,
         program: headless.display().to_string(),
-        timeout: std::time::Duration::from_secs(GHIDRA_TIMEOUT_SECS),
+        timeout: std::time::Duration::from_secs(timeout_secs),
     })?;
     let produced = export_dir.join("export.json");
     if outcome.timed_out {
-        return finish_timed_out_run(&cache_dir, &export_file, &produced, subject);
+        return finish_timed_out_run(&cache_dir, &export_file, &produced, subject, timeout_secs);
     }
     if !produced.exists() {
         let stdout_text = String::from_utf8_lossy(&outcome.stdout);
@@ -251,6 +270,7 @@ fn finish_timed_out_run(
     export_file: &Path,
     produced: &Path,
     subject: &Path,
+    timeout_secs: u64,
 ) -> Result<Export, FathomError> {
     if let Ok(bytes) = fs::read(produced)
         && let Ok(export) = parse_export(&bytes)
@@ -265,7 +285,7 @@ fn finish_timed_out_run(
     Err(FathomError::new(
         ErrorCode::ProviderTimeout,
         format!(
-            "Ghidra analysis exceeded the {GHIDRA_TIMEOUT_SECS}s provider bound; \
+            "Ghidra analysis exceeded the {timeout_secs}s provider bound; \
              the partial project was discarded, so a retry starts from a clean import"
         ),
     )
@@ -542,6 +562,7 @@ mod tests {
             &run.export_file,
             &run.produced,
             Path::new("/targets/sample"),
+            GHIDRA_TIMEOUT_SECS,
         )
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::ProviderTimeout);
@@ -615,10 +636,60 @@ mod tests {
             &run.export_file,
             &run.produced,
             Path::new("/targets/sample"),
+            GHIDRA_TIMEOUT_SECS,
         )
         .unwrap();
         assert_eq!(export.program.name, "true");
         assert_eq!(fs::read(&run.export_file).unwrap(), SAMPLE);
         let _ = fs::remove_dir_all(run.cache_dir.parent().unwrap());
+    }
+
+    #[test]
+    fn adversarial_first_import_bound_strictly_exceeds_repeat_bound() {
+        // The D2 failure mode: a first import handed the repeat
+        // bound is killed mid-analysis (330 s against a measured
+        // 1128 s first import). The split is only a fix while the
+        // first-import bound stays strictly above the repeat one.
+        assert!(provider_timeout_secs(true) > provider_timeout_secs(false));
+    }
+
+    #[test]
+    fn adversarial_timed_out_run_names_the_applied_bound() {
+        // The error must report the bound that actually killed
+        // the run: a first import that dies at the first-import
+        // bound must not claim the 330 s repeat bound did it.
+        let run = scratch_run("bound-name");
+        fs::write(&run.produced, b"{\"program\":").unwrap();
+        let error = finish_timed_out_run(
+            &run.cache_dir,
+            &run.export_file,
+            &run.produced,
+            Path::new("/targets/sample"),
+            GHIDRA_FIRST_IMPORT_TIMEOUT_SECS,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ProviderTimeout);
+        assert!(
+            error
+                .message
+                .contains(&format!("{GHIDRA_FIRST_IMPORT_TIMEOUT_SECS}s")),
+            "message names the applied bound: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn validation_provider_timeout_first_import() {
+        assert_eq!(
+            provider_timeout_secs(true),
+            GHIDRA_FIRST_IMPORT_TIMEOUT_SECS
+        );
+        assert_eq!(GHIDRA_FIRST_IMPORT_TIMEOUT_SECS, 1_800);
+    }
+
+    #[test]
+    fn validation_provider_timeout_repeat_run() {
+        assert_eq!(provider_timeout_secs(false), GHIDRA_TIMEOUT_SECS);
+        assert_eq!(GHIDRA_TIMEOUT_SECS, 330);
     }
 }

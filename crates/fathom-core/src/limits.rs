@@ -32,7 +32,19 @@ pub const FILE_COUNT_MAX: usize = 100_000;
 /// Functions retained from one program inventory.
 pub const FUNCTION_COUNT_MAX: usize = 5_000;
 
-/// Default wall-clock bound for one Ghidra provider run, seconds.
+/// Wall-clock bound for one Ghidra provider run that performs a
+/// first import (full auto-analysis of a subject with no imported
+/// project yet), seconds. First import of a large debug binary is
+/// measured in tens of minutes — a 76 MB Rust debug ELF took
+/// 1128 s on primo — far past the repeat-run bound below; the
+/// split gives a first import room to finish and populate the
+/// cache while repeat runs stay tight. Owner ruling D-241
+/// (2026-10-28): "raise the bound, test the heap."
+pub const GHIDRA_FIRST_IMPORT_TIMEOUT_SECS: u64 = 1_800;
+
+/// Default wall-clock bound for one Ghidra provider run against
+/// an already-imported project (a re-export, not an analysis),
+/// seconds.
 pub const GHIDRA_TIMEOUT_SECS: u64 = 330;
 
 /// Kernel symbols retained from one GPU code object (S7).
