@@ -70,6 +70,29 @@ fn locate_script_dir() -> Result<PathBuf, FathomError> {
     ))
 }
 
+/// The first element of `path` that Ghidra's project locator
+/// would reject, if any. Ghidra validates every element of a
+/// project location with `NamingUtilities.checkName`, which
+/// refuses names starting with '.'; a literal `.` or `..` element
+/// fails the same check. Root and ordinary elements are fine.
+fn ghidra_unusable_path_element(path: &Path) -> Option<String> {
+    use std::path::Component;
+    for component in path.components() {
+        match component {
+            Component::CurDir => return Some(".".to_string()),
+            Component::ParentDir => return Some("..".to_string()),
+            Component::Normal(name) => {
+                let name = name.to_string_lossy();
+                if name.starts_with('.') {
+                    return Some(name.into_owned());
+                }
+            }
+            Component::Prefix(_) | Component::RootDir => {}
+        }
+    }
+    None
+}
+
 /// Run (or reuse) the export for one subject and mode.
 pub fn run_export(
     config: &Config,
@@ -110,6 +133,27 @@ pub fn run_export(
         )
     })?;
     let project_dir = cache_dir.join("project");
+    // Ghidra's project locator rejects any path whose elements
+    // include a dot-prefixed name (`.local`, `.config`, ...), and
+    // the XDG state default (~/.local/state/fathom) always contains
+    // one — so check before paying for a launch whose only symptom
+    // would be the misleading "produced no export" error below.
+    if let Some(element) = ghidra_unusable_path_element(&project_dir) {
+        return Err(FathomError::new(
+            ErrorCode::ConfigurationInvalid,
+            format!(
+                "Ghidra cannot host its project at {}: path element \
+                 '{element}' starts with '.', which Ghidra's project \
+                 locator rejects",
+                project_dir.display()
+            ),
+        )
+        .with_remediation(
+            "Set state_dir in the fathom config to a path with no \
+             dot-prefixed elements (for example ~/fathom-state); the \
+             XDG default ~/.local/state/fathom always contains .local.",
+        ));
+    }
     // analyzeHeadless creates the project inside the location but
     // refuses a location directory that does not exist yet.
     fs::create_dir_all(&project_dir).map_err(|e| {
@@ -502,6 +546,62 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::ProviderTimeout);
         assert!(!run.cache_dir.exists());
+    }
+
+    #[test]
+    fn adversarial_dotdot_element_is_flagged() {
+        let path = Path::new("/home/user/state/../project");
+        assert_eq!(ghidra_unusable_path_element(path).as_deref(), Some(".."));
+    }
+
+    #[test]
+    fn adversarial_dot_element_positions_are_flagged() {
+        // The offending element may sit anywhere in the path: the
+        // project directory itself, or an early element like the
+        // estate's ~/.GH repo home.
+        let leaf = Path::new("/home/user/state/ghidra/abc/.project");
+        assert_eq!(
+            ghidra_unusable_path_element(leaf).as_deref(),
+            Some(".project")
+        );
+        let early = Path::new("/home/user/.GH/Qompass/fathom/project");
+        assert_eq!(ghidra_unusable_path_element(early).as_deref(), Some(".GH"));
+    }
+
+    #[test]
+    fn adversarial_xdg_default_state_path_is_flagged() {
+        // The shipped default: $HOME/.local/state/fathom — the
+        // exact configuration that silently killed the provider
+        // before this check existed.
+        let path = Path::new("/home/user/.local/state/fathom/ghidra/abc/project");
+        assert_eq!(
+            ghidra_unusable_path_element(path).as_deref(),
+            Some(".local")
+        );
+    }
+
+    #[test]
+    fn validation_clean_project_path_has_no_unusable_element() {
+        for path in [
+            "/",
+            "/tmp/fathom/state/ghidra/abc/project",
+            "/home/user/fathom-state/ghidra/abc/project",
+            "state/ghidra/abc/project",
+        ] {
+            assert_eq!(
+                ghidra_unusable_path_element(Path::new(path)),
+                None,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_dot_inside_a_name_is_fine() {
+        // Only a LEADING dot offends; names merely containing one
+        // are ordinary elements Ghidra accepts.
+        let path = Path::new("/home/user/fathom.state/ghidra/x.y/project");
+        assert_eq!(ghidra_unusable_path_element(path), None);
     }
 
     #[test]
