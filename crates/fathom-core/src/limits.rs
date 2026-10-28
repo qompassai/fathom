@@ -16,6 +16,13 @@ pub const ARCHIVE_TARGET_BYTES_MAX: u64 = 4_294_967_296;
 /// Entries retained from one ASAR archive listing.
 pub const ASAR_ENTRIES_MAX: usize = 100_000;
 
+/// Atoms retained from one BEAM module's atom table (S6).
+pub const BEAM_ATOMS_MAX: usize = 20_000;
+
+/// Function-table rows (exports, locals, imports, lambdas)
+/// retained from one BEAM module (S6).
+pub const BEAM_FUNCTIONS_MAX: usize = 20_000;
+
 /// Bytes of decompiled output retained per function dossier.
 pub const DECOMPILE_BYTES_MAX: usize = 1_048_576;
 
@@ -27,6 +34,9 @@ pub const FUNCTION_COUNT_MAX: usize = 5_000;
 
 /// Default wall-clock bound for one Ghidra provider run, seconds.
 pub const GHIDRA_TIMEOUT_SECS: u64 = 330;
+
+/// Kernel symbols retained from one GPU code object (S7).
+pub const GPU_KERNELS_MAX: usize = 5_000;
 
 /// Listing instructions retained in one function dossier.
 pub const INSTRUCTION_COUNT_MAX: usize = 2_000;
@@ -70,6 +80,21 @@ pub const PROOF_PER_SUBJECT_MAX: usize = 64;
 
 /// Canonical bytes of one claim's statement facts (SPEC §4.1.9).
 pub const PROOF_STATEMENT_BYTES_MAX: usize = 16_384;
+
+/// Code objects retained from one .pyc code tree (S5).
+pub const PYC_CODE_OBJECTS_MAX: usize = 5_000;
+
+/// String constants censused per code object in a .pyc (S5).
+pub const PYC_STRING_CONSTS_MAX: usize = 256;
+
+/// Values the bounded .pyc marshal reader may construct (S5).
+pub const PYC_VALUES_MAX: usize = 1_000_000;
+
+/// Entries retained from one PyInstaller TOC (S5).
+pub const PYINSTALLER_ENTRIES_MAX: usize = 100_000;
+
+/// Module rows retained from one PyInstaller PYZ archive (S5).
+pub const PYZ_MODULES_MAX: usize = 100_000;
 
 /// Decoded segment rows in one Ren'Py RPA index (readers SPEC §2.3).
 pub const RPA_ENTRIES_MAX: usize = 100_000;

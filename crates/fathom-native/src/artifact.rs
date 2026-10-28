@@ -40,6 +40,11 @@ pub fn inspect_artifact(_: &Registry, config: &Config, args: &Value) -> Result<V
 const PAK_FOOTER_BYTES: usize = 204;
 const PAK_MAGIC: [u8; 4] = [0xe1, 0x12, 0x6f, 0x5a];
 
+/// Tail window for the PyInstaller cookie probe: the cookie
+/// is 88 bytes and builds with appended data put it within
+/// the cookie scan window the python reader itself uses.
+const PYINSTALLER_TAIL_BYTES: usize = 65_624;
+
 fn inspect_file(path: &Path) -> Result<Value, FathomError> {
     let subject = subject_for_file(path)?;
     let head = read_head(path, 4096)?;
@@ -51,6 +56,19 @@ fn inspect_file(path: &Path) -> Result<Value, FathomError> {
             && tail.starts_with(&PAK_MAGIC)
         {
             classification = "Unreal pak";
+        }
+    }
+    if classification == "ELF" || classification == "PE" {
+        // A PyInstaller archive hides inside an executable:
+        // its cookie sits at (or near) the end of the file.
+        // One bounded tail read decides (the whole file when
+        // it is smaller than the window).
+        let tail_len = (subject.size_bytes as usize).min(PYINSTALLER_TAIL_BYTES);
+        if tail_len >= 88
+            && let Ok(tail) = read_tail(path, tail_len)
+            && crate::python::contains_cookie(&tail)
+        {
+            classification = "PyInstaller archive";
         }
     }
     let mut evidence = Evidence::new("inspect_artifact", "artifact");
@@ -180,7 +198,23 @@ fn walk(
 /// Format classification from magic bytes (SPEC §9.4).
 pub fn classify(head: &[u8]) -> &'static str {
     if head.starts_with(&[0x7f, b'E', b'L', b'F']) {
+        if head.len() >= 20 && u16::from_le_bytes([head[18], head[19]]) == crate::gpu::EM_AMDGPU {
+            return "AMDGPU code object";
+        }
         return "ELF";
+    }
+    if head.len() >= 12 && &head[0..4] == b"FOR1" && &head[8..12] == b"BEAM" {
+        return "BEAM module";
+    }
+    if head.starts_with(crate::gpu::OFFLOAD_BUNDLE_MAGIC) {
+        return "Clang offload bundle";
+    }
+    if head.len() >= 4
+        && head[2] == 0x0d
+        && head[3] == 0x0a
+        && crate::python::pyc_version(u16::from_le_bytes([head[0], head[1]])).is_some()
+    {
+        return "Python bytecode (pyc)";
     }
     if head.starts_with(b"MZ") {
         return "PE";
@@ -290,6 +324,30 @@ mod tests {
             plist_string("<key>CFBundleName</key><string></string>", "CFBundleName"),
             Some(String::new())
         );
+    }
+
+    #[test]
+    fn validation_classifications_s5_s7() {
+        let mut elf = vec![0_u8; 64];
+        elf[0..4].copy_from_slice(b"\x7fELF");
+        elf[18] = 62; // x86-64 stays a plain ELF
+        assert_eq!(classify(&elf), "ELF");
+        elf[18] = 224; // EM_AMDGPU
+        elf[19] = 0;
+        assert_eq!(classify(&elf), "AMDGPU code object");
+        assert_eq!(classify(b"FOR1\0\0\0\x10BEAM"), "BEAM module");
+        assert_eq!(
+            classify(b"__CLANG_OFFLOAD_BUNDLE__\x02\0\0\0"),
+            "Clang offload bundle"
+        );
+        // Python 3.12 magic 3531 = 0x0dcb little-endian.
+        assert_eq!(
+            classify(&[0xcb, 0x0d, 0x0d, 0x0a, 0, 0, 0, 0]),
+            "Python bytecode (pyc)"
+        );
+        // The 0x0d 0x0a terminator alone does not classify an
+        // unknown magic.
+        assert_eq!(classify(&[0xff, 0x7f, 0x0d, 0x0a]), "unknown");
     }
 
     #[test]

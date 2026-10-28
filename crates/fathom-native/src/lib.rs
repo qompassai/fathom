@@ -9,11 +9,14 @@
 #![forbid(unsafe_code)]
 
 pub mod artifact;
+pub mod beam;
 pub mod engine;
 pub mod ghidra;
 pub mod godot;
+pub mod gpu;
 pub mod il2cpp;
 pub mod layout;
+pub mod python;
 pub mod renpy;
 pub mod unity;
 pub mod unreal;
@@ -88,6 +91,20 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "inspect_beam_module",
+            ToolClass::Read,
+            "beam",
+            "BEAM module census: IFF chunk inventory, atom table, imports, \
+             exports, locals, and lambdas resolved through the atom table, \
+             Code header cross-checked against the function tables, literal \
+             table walked as external terms; the opcode stream is \
+             inventoried, never decoded",
+            target_schema(),
+        ),
+        Arc::new(beam::inspect_beam_module),
+    );
+    registry.register(
+        descriptor(
             "inspect_binary_layout",
             ToolClass::Read,
             "native-layout",
@@ -107,6 +124,34 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(godot::inspect_godot_pck),
+    );
+    registry.register(
+        descriptor(
+            "inspect_gpu_code_object",
+            ToolClass::Read,
+            "gpu",
+            "GPU code-object census: a standalone AMDGPU ELF (target from \
+             e_flags, kernel symbols with descriptor presence, NT_AMDGPU_METADATA \
+             note decoded from MessagePack or YAML), a Clang offload bundle, or \
+             a host binary with bundles embedded; instruction streams are \
+             inventoried, never disassembled",
+            target_schema(),
+        ),
+        Arc::new(gpu::inspect_gpu_code_object),
+    );
+    registry.register(
+        descriptor(
+            "inspect_python_artifact",
+            ToolClass::Read,
+            "python",
+            "Python artifact census: a .pyc (PEP 552 header facts and the \
+             code-object tree — functions, classes, lambdas, names, string \
+             constants — read with a bounded marshal reader) or a PyInstaller \
+             archive (CArchive TOC with stored-byte SHA-256 per entry and the \
+             nested PYZ module census); bytecode instructions are not decoded",
+            target_schema(),
+        ),
+        Arc::new(python::inspect_python_artifact),
     );
     registry.register(
         descriptor(
