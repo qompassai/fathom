@@ -705,7 +705,7 @@ pinned in `Cargo.lock` and built offline thereafter.
 | Binary formats (layout) | goblin 0.10.7; object 0.40.0; pelite 0.10.0 | **Adopt goblin.** ELF/Mach-O/PE parsing in one crate; object is the better *writer's* library and we only read; pelite is PE-only and cannot serve ELF/Mach-O paths. |
 | Deep native analysis | Ghidra 12.1.2 headless (host); Hopper (no Linux automation story); IDA (licensed, GUI-bound) | **Drive Ghidra headless** (§9.1). Reimplementing a decompiler is not a port; upstream itself is a provider shell over engines. |
 | Browser observation | chromiumoxide 0.9.1; raw CDP over websocket by hand | chromiumoxide is viable and maintained; the scenario/session engine around it is a program of its own → **scaffold in this run**, adopt chromiumoxide when the stage is built. Stage 5 built the provider on the Chromium headless CLI (`--dump-dom` under the bounded process runner) rather than chromiumoxide; the session/scenario surface remains unbuilt. |
-| MCP transport | rmcp 3.5.1 (official Rust SDK); hand-rolled JSON-RPC | **Hand-roll.** The wire surface fathom needs (initialize, tools/list, tools/call, ping over stdio + one HTTP POST route) is small; hand-rolling keeps the transport auditable and immune to SDK churn. Trade-off named: protocol upgrades are our work. |
+| MCP transport | rmcp 3.5.1 (official Rust SDK); hand-rolled JSON-RPC | **Hand-roll** (original verdict). The wire surface fathom needs (initialize, tools/list, tools/call, ping over stdio + one HTTP POST route) is small; hand-rolling keeps the transport auditable and immune to SDK churn. Trade-off named: protocol upgrades are our work. **Superseded 2026-10-27 (D-113, fleet standardization WS2 W3): adopt rmcp 3.8.0, modern era (2026-07-28) only.** The registry, policy, and every tool handler are unchanged; a byte-level era guard owns stdio framing (the baseline's error texts, the designed `-32022` legacy refusal, a 4 MiB line bound), rmcp owns the envelope behind it, and streamable HTTP carries the same handler with legacy sessions off. Parity against the hand-rolled baseline is recorded in the WS2 W3 gate report. |
 | A2A card | a2a 0.1.0 (985 downloads, placeholder); hand-rolled per estate pattern | **Hand-roll**, following the volta/vongola pattern: JCS-canonicalized card, Ed25519 signature. |
 | JCS canonicalization | serde_jcs 0.2.0; hand-rolled RFC 8785 | **Hand-roll** with the RFC 8785 test vectors as unit tests; one less dependency for ~100 lines with a public test suite. |
 | .NET metadata | pelite (PE only, no CLI tables); a dedicated ECMA-335 crate (none mature found) | **Manual ECMA-335 parsing** over goblin's PE headers: metadata root, streams, table row geometry, TypeDef/MethodDef/ImplMap reads. The format is a published standard (ECMA-335); the parser is bounded and testable against fixtures. |
@@ -993,14 +993,20 @@ filenames, metadata, or priors.
   (host/engine inventory: Ghidra discovery, versions, config
   validity — facts, not fixes), and one-shot forms of the read
   tools for terminal use, emitting the same evidence envelopes.
-- **MCP stdio**: newline-delimited JSON-RPC; `initialize`, `ping`,
-  `tools/list`, `tools/call`. Advertised schemas are complete;
-  the compact input-schema profile upstream added for size-capped
-  clients is NOT-IMPLEMENTED (named, with its 13,312-byte budget
+- **MCP stdio**: newline-delimited JSON-RPC via rmcp behind a
+  byte-level era guard (modern era only, 2026-07-28, since the
+  2026-10-27 D-113 migration); sessions open with
+  `server/discover`, legacy `initialize` is refused `-32022`,
+  and the guard preserves the hand-rolled baseline's framing
+  error texts. Advertised schemas are complete; the compact
+  input-schema profile upstream added for size-capped clients
+  is NOT-IMPLEMENTED (named, with its 13,312-byte budget
   recorded for when it is built).
-- **MCP streamable HTTP**: `POST /mcp` on the same JSON-RPC core,
-  loopback by default. Stateless per request, matching the
-  stateless tool design.
+- **MCP streamable HTTP**: `POST /mcp` served by rmcp's
+  streamable-HTTP service with the same handler, loopback by
+  default; legacy session mode off and modern per-request
+  protocol metadata required. Stateless per request, matching
+  the stateless tool design.
 - **A2A**: `GET /.well-known/agent-card.json` serves the agent
   card: name, description, URL, skills derived from the tool
   registry (id, name, description, tags per tool class), and an

@@ -95,7 +95,7 @@ fn run(cli: Cli) -> Result<(), FathomError> {
             if http {
                 serve_http(config, registry)
             } else {
-                fathom_mcp::stdio::run_stdio(&registry, &config)
+                fathom_mcp::stdio::run_stdio(registry, config)
             }
         }
         Command::Tool { name, args } => {

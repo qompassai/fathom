@@ -1,15 +1,13 @@
-//! fathom-mcp: MCP transports for the port.
+//! fathom-mcp: MCP transports for fathom.
 //!
-//! A hand-rolled JSON-RPC core (SPEC §5: the surface is small and
-//! stays auditable) shared by the stdio and streamable-HTTP
-//! transports. Tool failures follow upstream's rule: `isError`
-//! with the canonical error JSON as text content and no
-//! `structuredContent`.
+//! rmcp (modern era, 2026-07-28, only) behind an era guard on
+//! stdio and rmcp's streamable-HTTP service on HTTP — see
+//! `guard.rs` and `http.rs`. Tool failures follow upstream's
+//! rule: `isError` with the canonical error JSON as text content
+//! and no `structuredContent`.
 #![forbid(unsafe_code)]
 
+pub mod guard;
 pub mod http;
-pub mod protocol;
+pub mod server;
 pub mod stdio;
-
-/// The MCP protocol version this server negotiates.
-pub const PROTOCOL_VERSION: &str = "2025-06-18";
