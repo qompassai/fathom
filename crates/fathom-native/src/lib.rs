@@ -66,6 +66,31 @@ fn target_and(properties: Value, required: &[&str]) -> Value {
     })
 }
 
+/// `properties` plus the `source`/`target` pair of a
+/// cross-binary (G3) tool: both are paths under target roots.
+fn source_and(properties: Value, required: &[&str]) -> Value {
+    let mut merged = properties.as_object().cloned().unwrap_or_default();
+    merged.insert(
+        "source".into(),
+        json!({"type": "string", "description": "Documented binary: path under a configured target root"}),
+    );
+    merged.insert(
+        "target".into(),
+        json!({"type": "string", "description": "Path under a configured target root"}),
+    );
+    let mut required: Vec<&str> = required.to_vec();
+    required.push("source");
+    required.push("target");
+    required.sort_unstable();
+    required.dedup();
+    json!({
+        "type": "object",
+        "properties": merged,
+        "required": required,
+        "additionalProperties": false,
+    })
+}
+
 /// `properties` plus the paged-listing `offset`/`limit` pair.
 fn with_page(properties: Value) -> Value {
     let mut merged = properties.as_object().cloned().unwrap_or_default();
@@ -160,6 +185,19 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::write::apply_data_type),
+    );
+    registry.register(
+        descriptor(
+            "apply_function_documentation",
+            ToolClass::Execute,
+            "ghidra",
+            "Transfer one documented function's documentation set onto its hash-matched counterpart in the target (Execute; G2 transactional path, G3)",
+            source_and(
+                json!({"function": {"type": "string"}, "target_function": {"type": "string"}}),
+                &["function"],
+            ),
+        ),
+        Arc::new(ghidra::transfer::apply_function_documentation),
     );
     registry.register(
         descriptor(
@@ -258,6 +296,16 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::write::clone_data_type),
+    );
+    registry.register(
+        descriptor(
+            "compare_programs_documentation",
+            ToolClass::Read,
+            "ghidra",
+            "Compare two binaries' documentation: hash-match plan plus measured completeness for both sides (G3)",
+            source_and(json!({}), &[]),
+        ),
+        Arc::new(ghidra::transfer::compare_programs_documentation),
     );
     registry.register(
         descriptor(
@@ -482,6 +530,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "diff_functions",
+            ToolClass::Read,
+            "ghidra",
+            "Diff one function in each of two binaries: hashes and the documentation fields that differ (G3)",
+            source_and(
+                json!({"source_function": {"type": "string"}, "target_function": {"type": "string"}}),
+                &["source_function", "target_function"],
+            ),
+        ),
+        Arc::new(ghidra::transfer::diff_functions),
+    );
+    registry.register(
+        descriptor(
             "disassemble_bytes",
             ToolClass::Read,
             "ghidra",
@@ -527,6 +588,29 @@ pub fn register(registry: &mut Registry) {
             target_and(json!({"start": {"type": "string"}}), &[]),
         ),
         Arc::new(ghidra::functions::find_next_undefined_function),
+    );
+    registry.register(
+        descriptor(
+            "find_similar_functions",
+            ToolClass::Read,
+            "ghidra",
+            "Find target functions sharing a source function's hash (exact match; ambiguity is flagged, never guessed) (G3)",
+            source_and(
+                json!({"function": {"type": "string"}}),
+                &["function"],
+            ),
+        ),
+        Arc::new(ghidra::transfer::find_similar_functions),
+    );
+    registry.register(
+        descriptor(
+            "get_bulk_function_hashes",
+            ToolClass::Read,
+            "ghidra",
+            "Every function's SHA-256 hash (instruction bytes, address order) for cross-binary matching (G3)",
+            target_schema(),
+        ),
+        Arc::new(ghidra::transfer::get_bulk_function_hashes),
     );
     registry.register(
         descriptor(
@@ -632,6 +716,29 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "get_function_documentation",
+            ToolClass::Read,
+            "ghidra",
+            "One function's full documentation set: name, prototype, comments, bookmarks, tags, variables (G3)",
+            target_and(
+                json!({"function": {"type": "string"}}),
+                &["function"],
+            ),
+        ),
+        Arc::new(ghidra::transfer::get_function_documentation),
+    );
+    registry.register(
+        descriptor(
+            "get_function_hash",
+            ToolClass::Read,
+            "ghidra",
+            "One function's SHA-256 hash (instruction bytes, address order) (G3)",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::transfer::get_function_hash),
+    );
+    registry.register(
+        descriptor(
             "get_function_jump_targets",
             ToolClass::Read,
             "ghidra",
@@ -665,6 +772,16 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::functions::get_function_pcode),
+    );
+    registry.register(
+        descriptor(
+            "get_function_signature",
+            ToolClass::Read,
+            "ghidra",
+            "One function's signature: prototype string, return type, and parameters (G3)",
+            target_and(json!({"function": {"type": "string"}}), &["function"]),
+        ),
+        Arc::new(ghidra::transfer::get_function_signature),
     );
     registry.register(
         descriptor(
@@ -1216,6 +1333,16 @@ pub fn register(registry: &mut Registry) {
             inventory_schema(),
         ),
         Arc::new(ghidra::list_strings),
+    );
+    registry.register(
+        descriptor(
+            "merge_program_documentation",
+            ToolClass::Execute,
+            "ghidra",
+            "Transfer documentation from a documented binary onto every hash-matched function of the target in one transaction; unmatched and ambiguous functions are reported, never guessed (Execute; G3)",
+            source_and(json!({}), &[]),
+        ),
+        Arc::new(ghidra::transfer::merge_program_documentation),
     );
     registry.register(
         descriptor(

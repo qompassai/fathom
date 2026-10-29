@@ -37,12 +37,31 @@ names (279) as the row set per Pax ruling.
 
 | Status | Count |
 |--------|------:|
-| HAVE | 80 |
-| BUILD | 128 |
-| DEFER | 71 |
+| HAVE | 89 |
+| BUILD | 113 |
+| DEFER | 77 |
 | **TOTAL rows** | **279** |
 
-BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
+BUILD by study stage: G1=76, G2=35, G3=0, G4=2.
+
+**G3 adjudications (live differential vs the bethington bridge, FxDiff3, 2026-10-29):**
+function-hash VALUES differ between the implementations (bridge anchor hash
+`d15155a6…` vs fathom `2f79e258…` for the same function) — the hash disciplines
+are implementation-specific; each is internally consistent (source hash equals
+target hash for identical code within each implementation) and both matched the
+same 11/11 function pairs on the fixture pair, so this is a recorded legitimate
+difference, not a defect. Fathom's discipline is documented on its tools:
+SHA-256 over the concatenated instruction bytes in address order. The bridge's
+`get_function_documentation` surfaces neither bookmarks nor tags; those families
+were verified AGREE through the bridge's own `list_bookmarks` /
+`get_function_tags` read-backs after its `merge_program_documentation`
+(bookmarks planned/applied 1/1, tags 1/1, names 11/11, signatures 5/5, plate
+comments 2/2, instruction comments 1/1). The bridge merge also reported
+`errors: 49` internally and applied globals/data definitions beyond the
+function-documentation scope fathom transfers — bridge scope, recorded, not
+matched. Signature equality in fathom's transfer and diff is up to
+calling-convention rendering (`__stdcall` may render on an imported signature
+and not on the same prototype applied in another program).
 
 `observe_browser` remains a fathom NotImplemented scaffold and is **not** cited as HAVE
 (conformance drift for the gate).
@@ -67,9 +86,9 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 14 | `analyze_struct_field_usage` | Analysis | BUILD | — | G1 | — |
 | 15 | `apply_data_classification` | Analysis | BUILD | — | G2 | — |
 | 16 | `apply_data_type` | Data Types & Structures | HAVE | `apply_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
-| 17 | `apply_function_documentation` | Utility & Documentation Transfer | BUILD | — | G3 | — |
-| 18 | `archive_ingest_function` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
-| 19 | `archive_ingest_program` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
+| 17 | `apply_function_documentation` | Utility & Documentation Transfer | HAVE | `apply_function_documentation` | G3 | landed G3 — hash-verified single-function transfer (Execute-class, G2 transactional path, read-back verified) |
+| 18 | `archive_ingest_function` | Cross-Binary Documentation & Archive | DEFER | — | — | deferred with reason (G3): fathom keeps no archive store — documentation lives in the subject's evidence bundle and moves between programs through the G3 transfer tools directly; an offline doc store is a separate commission |
+| 19 | `archive_ingest_program` | Cross-Binary Documentation & Archive | DEFER | — | — | deferred with reason (G3): fathom keeps no archive store — documentation lives in the subject's evidence bundle and moves between programs through the G3 transfer tools directly; an offline doc store is a separate commission |
 | 20 | `archive_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 21 | `audit_global` | Data Types & Structures | BUILD | — | G2 | — |
 | 22 | `audit_globals_in_function` | Data Types & Structures | BUILD | — | G2 | — |
@@ -83,8 +102,8 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 30 | `batch_rename_function_components` | Renaming & Labels | BUILD | — | G2 | — |
 | 31 | `batch_set_comments` | Comments & Bookmarks | HAVE | `batch_set_comments` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 32 | `batch_set_variable_types` | Data Types & Structures | BUILD | — | G2 | — |
-| 33 | `batch_string_anchor_report` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
-| 34 | `bulk_fuzzy_match` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
+| 33 | `batch_string_anchor_report` | Cross-Binary Documentation & Archive | DEFER | — | — | deferred with reason (G3): string-anchor reporting belongs to the archive lane; no estate consumer; the transfer gate does not depend on it |
+| 34 | `bulk_fuzzy_match` | Cross-Binary Documentation & Archive | DEFER | — | — | deferred with reason (G3): fuzzy matching is similarity-scored and version-sensitive; fathom's matching discipline is exact-hash only, by design (deterministic gates) |
 | 35 | `can_rename_at_address` | Analysis | BUILD | — | G1 | — |
 | 36 | `check_connection` | Utility & Documentation Transfer | HAVE | `session_info` | — | — |
 | 37 | `check_tools` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
@@ -95,7 +114,7 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 42 | `clone_data_type` | Data Types & Structures | HAVE | `clone_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 43 | `close_program` | Program & Session Management | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 44 | `close_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
-| 45 | `compare_programs_documentation` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 45 | `compare_programs_documentation` | Utility & Documentation Transfer | HAVE | `compare_programs_documentation` | G3 | landed G3 — hash-match plan + measured completeness for both programs |
 | 46 | `configure_analyzer` | Analysis | BUILD | — | G2 | — |
 | 47 | `connect_instance` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
 | 48 | `convert_number` | Utility & Documentation Transfer | BUILD | — | G1 | — |
@@ -144,7 +163,7 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 91 | `detect_array_bounds` | Analysis | BUILD | — | G1 | — |
 | 92 | `detect_crypto_constants` | Analysis | BUILD | — | G1 | — |
 | 93 | `detect_malware_behaviors` | Analysis | BUILD | — | G1 | — |
-| 94 | `diff_functions` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 94 | `diff_functions` | Utility & Documentation Transfer | HAVE | `diff_functions` | G3 | landed G3 — hash equality + documentation field differences (signature compared up to calling-convention rendering) |
 | 95 | `disassemble_bytes` | Decompilation & Disassembly | BUILD | — | G1 | — |
 | 96 | `disassemble_function` | Decompilation & Disassembly | HAVE | `analyze_function` | — | partial — listing inside dossier |
 | 97 | `embed_struct_field` | Data Types & Structures | BUILD | — | G2 | — |
@@ -157,13 +176,13 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 104 | `find_code_gaps` | Analysis | BUILD | — | G1 | — |
 | 105 | `find_dead_code` | Analysis | BUILD | — | G1 | — |
 | 106 | `find_next_undefined_function` | Analysis | BUILD | — | G1 | — |
-| 107 | `find_similar_functions` | Search | BUILD | — | G3 | — |
-| 108 | `find_similar_functions_fuzzy` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
-| 109 | `find_undocumented_by_string` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 107 | `find_similar_functions` | Search | HAVE | `find_similar_functions` | G3 | landed G3 — exact-hash form; ambiguity flagged, never guessed (fuzzy-threshold form is the separate `find_similar_functions_fuzzy` row) |
+| 108 | `find_similar_functions_fuzzy` | Cross-Binary Documentation & Archive | DEFER | — | — | deferred with reason (G3): fuzzy matching is similarity-scored and version-sensitive; fathom's matching discipline is exact-hash only, by design (deterministic gates) |
+| 109 | `find_undocumented_by_string` | Utility & Documentation Transfer | DEFER | — | — | deferred with reason (G3): depends on the string-anchor machinery deferred with `batch_string_anchor_report` |
 | 110 | `force_decompile` | Decompilation & Disassembly | HAVE | `analyze_function` | — | partial — force-fresh path unconfirmed |
 | 111 | `get_address_spaces` | Program & Session Management | HAVE | `binary_overview` | — | partial |
 | 112 | `get_assembly_context` | Analysis | BUILD | — | G1 | — |
-| 113 | `get_bulk_function_hashes` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 113 | `get_bulk_function_hashes` | Utility & Documentation Transfer | HAVE | `get_bulk_function_hashes` | G3 | landed G3 — SHA-256 over concatenated instruction bytes in address order |
 | 114 | `get_bulk_xrefs` | Cross-References | BUILD | — | G1 | — |
 | 115 | `get_comment` | Comments & Bookmarks | BUILD | — | G1 | — |
 | 116 | `get_current_address` | Context & Lookups | DEFER | — | — | GUI-only tool; fathom is headless |
@@ -181,12 +200,12 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 128 | `get_function_callees` | Context & Lookups | HAVE | `analyze_function` | — | partial — callees in dossier |
 | 129 | `get_function_callers` | Context & Lookups | HAVE | `analyze_function` | — | partial — callers in dossier |
 | 130 | `get_function_count` | Context & Lookups | HAVE | `binary_overview` | — | partial — inventory counts |
-| 131 | `get_function_documentation` | Utility & Documentation Transfer | BUILD | — | G3 | — |
-| 132 | `get_function_hash` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 131 | `get_function_documentation` | Utility & Documentation Transfer | HAVE | `get_function_documentation` | G3 | landed G3 — full documentation set per function |
+| 132 | `get_function_hash` | Utility & Documentation Transfer | HAVE | `get_function_hash` | G3 | landed G3 — SHA-256 over concatenated instruction bytes in address order |
 | 133 | `get_function_jump_targets` | Context & Lookups | BUILD | — | G1 | — |
 | 134 | `get_function_labels` | Context & Lookups | BUILD | — | G1 | — |
 | 135 | `get_function_pcode` | Analysis | BUILD | — | G1 | — |
-| 136 | `get_function_signature` | Utility & Documentation Transfer | BUILD | — | G3 | — |
+| 136 | `get_function_signature` | Utility & Documentation Transfer | HAVE | `get_function_signature` | G3 | landed G3 |
 | 137 | `get_function_tags` | Function Tags, Variables & Attributes | BUILD | — | G1 | — |
 | 138 | `get_function_variables` | Context & Lookups | BUILD | — | G1 | — |
 | 139 | `get_function_xrefs` | Cross-References | BUILD | — | G1 | — |
@@ -241,7 +260,7 @@ BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 | 188 | `load_tool_group` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
 | 189 | `mcp_health` | Utility & Documentation Transfer | HAVE | `session_info` | — | partial — pool/uptime fields not in fathom |
 | 190 | `mcp_schema` | Utility & Documentation Transfer | HAVE | `session_info` | — | partial — catalog via tools/list + session_info |
-| 191 | `merge_program_documentation` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
+| 191 | `merge_program_documentation` | Cross-Binary Documentation & Archive | HAVE | `merge_program_documentation` | G3 | landed G3 — whole-program hash-matched transfer in one transaction; unmatched and ambiguous functions reported exactly |
 | 192 | `modify_struct_field` | Data Types & Structures | HAVE | `modify_struct_field` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 193 | `modify_struct_field_type` | Data Types & Structures | BUILD | — | G2 | — |
 | 194 | `move_data_type_to_category` | Data Types & Structures | HAVE | `move_data_type_to_category` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
