@@ -522,7 +522,7 @@ checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
 
 [[package]]
 name = "fathom-a2a"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-art"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fathom-core",
  "image",
@@ -543,7 +543,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "clap",
@@ -552,7 +552,7 @@ dependencies = [
  "fathom-core",
  "fathom-js",
  "fathom-managed",
- "fathom-mcp",
+ "fathom-mcp-server",
  "fathom-native",
  "fathom-observe",
  "fathom-video",
@@ -562,7 +562,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-js"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fathom-core",
  "oxc_allocator",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-managed"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fathom-core",
  "goblin",
@@ -595,8 +595,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "fathom-mcp"
-version = "0.1.0"
+name = "fathom-mcp-server"
+version = "1.0.0"
 dependencies = [
  "axum",
  "fathom-core",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-native"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fathom-core",
  "flate2",
@@ -621,7 +621,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-observe"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "fathom-core",
  "flate2",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "fathom-video"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "fathom-core",

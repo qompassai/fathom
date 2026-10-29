@@ -14,7 +14,7 @@ the registry applies policy before any handler runs.
 | `fathom-core` | Config, evidence model, error contract, policy, registry, bounded process runner |
 | `fathom-js` | JavaScript/Electron static analysis (oxc) and ASAR archives |
 | `fathom-managed` | .NET metadata via manual ECMA-335 parsing over goblin PE |
-| `fathom-mcp` | MCP protocol: stdio transport and streamable HTTP |
+| `fathom-mcp-server` | MCP protocol: stdio transport and streamable HTTP |
 | `fathom-native` | Native binaries via Ghidra headless; binary layout via goblin |
 | `fathom-observe` | Process capture, web captures, EVM, firmware, Android, Apple, browser |
 

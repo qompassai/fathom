@@ -1,4 +1,4 @@
-//! fathom-mcp: MCP transports for fathom.
+//! fathom-mcp-server: MCP transports for fathom.
 //!
 //! rmcp (modern era, 2026-07-28, only) behind an era guard on
 //! stdio and rmcp's streamable-HTTP service on HTTP — see

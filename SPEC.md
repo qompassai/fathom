@@ -1059,7 +1059,7 @@ filenames, metadata, or priors.
 - **Stage 1** — scaffolding (estate `.ai`/`.claude`/`.opencode`/
   `.openshell`, licenses, flake, book) and core crates:
   `fathom-core` (config, errors, evidence, policy, registry,
-  confinement, bounded processes), `fathom-mcp`, `fathom-a2a`,
+  confinement, bounded processes), `fathom-mcp-server`, `fathom-a2a`,
   `fathom-cli`. Gate: core test suite green.
 - **Stage 2** — first providers working: `fathom-native` (Ghidra
   batch export + goblin layout) and `fathom-js` (oxc + ASAR), with

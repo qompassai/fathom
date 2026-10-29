@@ -10,6 +10,73 @@ same table is published at https://qompass.ai/solutions/mcp/fathom/
 
 **Standing.** Inspector sweep 2026-10-20: legacy-only — negotiated 2025-06-18, modern `server/discover` not offered. 25/25 tools matched the census in order; the strict schema gate passed with no findings; the smoke call was well-formed. Annotations on all 25 tools; no `outputSchema` anywhere.
 
+## Current release and deferred items
+
+**Current release: fathom 1.0.0 (2026-10-29).** One version line:
+the workspace `Cargo.toml`, every workspace crate, and
+`server.json` (`ai.qompass/fathom`) all read 1.0.0. Publication of
+the 1.0.0 line (crates.io and the registry) is held for the
+resume-5 publish window and recorded in the estate publish log.
+The 0.1.x-era statements in the sweep record below are the dated
+2026-10-20 Inspector sweep's history, not the current release.
+
+### Deferred at 1.0.0
+
+- **Witness bundle (MCP-server introspection + artifact diffing /
+  build provenance) — DEFERRED.** The staged SPEC
+  (`fathom-witness-bundle-20261027/SPEC.md`, D-150) is not built
+  at 1.0.0: its section 19 carries five open design points for
+  the spec gate / Owner that a build must not decide silently —
+  Q1 HTTP-transport introspection scope (v1 is stdio-only;
+  slipway's D-118 certification may need wire-level probing of
+  the in-app servers); Q2 tokenizer dependency (vendored
+  cl100k_base/o200k_base tables vs a tokenizer crate — licensing
+  vs supply-chain); Q3 whether introspection of fathom itself
+  counts as independent evidence for fleet DoD; Q4 provenance
+  authorship surface (both consumers — slipway and the
+  publish-freeze process — to confirm before the L2-S2 record
+  shape freezes); Q5 era probe-set growth (amendment only, for
+  probe-suite comparability). Leg 2's game-container structural
+  diff (L2-S4) is additionally staged behind the leg-3 archive
+  readers (PCK format 4 is readers-program item S4.1). Named
+  consumers waiting on this leg: slipway G-W2 (witness L2
+  verification of the light-show Play AAB vs F-Droid APK) and
+  ache (leg 1's first-consumer run).
+- **Web-RE (W1-W3) — DEFERRED VISIBLY, Owner question open**
+  (fleet-to-1.0 program section 6 item 8). The staged SPEC
+  (`fathom-web-re-20261027/SPEC.md`) rules in its section 2 that
+  scenarios are data and a run is one call — there is no
+  cross-call interactive session handle — and its W0 gate
+  requires Owner acceptance of the section 14 non-goals. Pax
+  recommendation on record: accept the SPEC as-is. Not built at
+  1.0.0.
+- **YouTube-RE Y3-Y5 — DEFERRED VISIBLY.** Y1 (ingest) and Y2
+  (guide) are landed as the fathom-video crate. Y3 (the
+  phaedrus loop), Y4 (the clean-room protocol), and Y5
+  (crystallization) carry the staged SPEC's section 18 open
+  questions for the gate / Owner, including Q1 segment ingest
+  in v1, Q2 frame semantics (a tesseract-class OCR leg vs
+  caller-authored claims), Q4 media retention (indefinite vs a
+  media-only eviction verb), and Q6 phaedrus P-1 timing (adopt
+  question-shaped candidates with the stated correlation
+  limitation, or hold Y3 until phaedrus grows the query kind).
+  Not built at 1.0.0.
+- **BEAM opcode decode NOT-IMPLEMENTED.** `inspect_beam_module`
+  is chunk/table-level: IFF/ERTS chunk inventory, Atom/AtU8 atom
+  table, ImpT/ExpT/LocT/FunT function tables resolved through
+  the atom table, Code header cross-checked, LitT decompressed
+  and walked with a bounded external-term reader. Opcode-stream
+  decode is NOT-IMPLEMENTED: opcode tables are
+  instruction-set-versioned and a wrong table would fabricate
+  facts (SPEC staging table, S6 row).
+- **NativeAOT NativeFormat graph NOT-IMPLEMENTED.**
+  `inspect_managed_assembly` screens NativeAOT by marker-derived
+  classification (Derived confidence), with section/export
+  inventories and a dotted-string census. The NativeFormat
+  metadata graph reader is NOT-IMPLEMENTED, gated on a real
+  NativeAOT fixture: no .NET SDK exists on estate machines to
+  produce one (SPEC staging table, S8 row).
+
 Status vocabulary: **Pass** (evidence satisfies the row) · **Partial**
 (partly adopted) · **Gap** (evidence shows the row unmet) · **Not
 applicable** (the row's feature or transport is not in play for this

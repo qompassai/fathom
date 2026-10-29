@@ -95,7 +95,7 @@ fn run(cli: Cli) -> Result<(), FathomError> {
             if http {
                 serve_http(config, registry)
             } else {
-                fathom_mcp::stdio::run_stdio(registry, config)
+                fathom_mcp_server::stdio::run_stdio(registry, config)
             }
         }
         Command::Tool { name, args } => {
@@ -188,7 +188,7 @@ fn serve_http(config: Config, registry: Registry) -> Result<(), FathomError> {
     })?;
     runtime.block_on(async move {
         let card = build_card(&config, &registry, None)?;
-        let state = Arc::new(fathom_mcp::http::HttpState {
+        let state = Arc::new(fathom_mcp_server::http::HttpState {
             config: Arc::new(config),
             registry: Arc::new(registry),
         });
@@ -199,7 +199,7 @@ fn serve_http(config: Config, registry: Registry) -> Result<(), FathomError> {
                 format!("cannot bind {address}: {e}"),
             )
         })?;
-        let app = fathom_mcp::http::router(state).merge(fathom_a2a::card::card_router(card));
+        let app = fathom_mcp_server::http::router(state).merge(fathom_a2a::card::card_router(card));
         axum::serve(listener, app).await.map_err(|e| {
             FathomError::new(
                 ErrorCode::ExecutionFailure,
