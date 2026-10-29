@@ -5,6 +5,8 @@
 <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 <a href="https://doi.org/10.5281/zenodo.23503520"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23503520.svg" alt="DOI"></a>
 
+Current release: **1.0.0** (2026-10-29). Deferred items are listed in [COMPLIANCE.md](COMPLIANCE.md); release history in [CHANGELOG.md](CHANGELOG.md).
+
 Rust port of REA (Reverse Engineer Anything): one
 provider-neutral MCP server for reverse engineering — native
 binaries, JavaScript/Electron applications, .NET assemblies, web
@@ -30,7 +32,7 @@ supply chain — the estate's standing direction (SPEC §1).
 
 - `fathom-core` — config, error contracts, evidence model, policy,
   tool registry, confinement, bounded processes.
-- `fathom-mcp` — MCP stdio + streamable HTTP transports.
+- `fathom-mcp-server` — MCP stdio + streamable HTTP transports.
 - `fathom-a2a` — signed A2A agent card (JCS + Ed25519).
 - `fathom-native` — Ghidra headless provider + binary layout (goblin).
 - `fathom-js` — JavaScript/Electron static analysis (oxc) + ASAR.

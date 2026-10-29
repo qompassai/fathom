@@ -18,7 +18,7 @@ fathom-art = { path = "../fathom-art" }
 fathom-core = { path = "../fathom-core" }
 fathom-js = { path = "../fathom-js" }
 fathom-managed = { path = "../fathom-managed" }
-fathom-mcp = { path = "../fathom-mcp" }
+fathom-mcp-server = { path = "../fathom-mcp" }
 fathom-native = { path = "../fathom-native" }
 fathom-observe = { path = "../fathom-observe" }
 fathom-video = { path = "../fathom-video" }
