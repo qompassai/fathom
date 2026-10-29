@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "fathom native-binary provider: Ghidra headless analysis, artifact and layout inspection"
 
 [dependencies]
-fathom-core = { path = "../fathom-core" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
 flate2.workspace = true
 goblin = "0.10"
 lz4_flex.workspace = true
