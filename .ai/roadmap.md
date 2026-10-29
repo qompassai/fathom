@@ -33,9 +33,9 @@ matrix: TraceRmi live debugging and Ghidra Server collaboration.
   - verify: cargo test
   - verify: cargo clippy --all-targets -- -D warnings
   - evidence: 2 verify commands, all exit 0 at 2026-10-29T08:27:06Z
-- [ ] R-203 G2 — documentation & write tools: rename, labels, comments, prototypes, variables, structure creation via the transactional mutation path (Execute-class, flowguard-gated); the 3 G1 not-implemented rows (add_memory_reference, remove_reference, list_open_programs per SPEC §4) resolve here or keep their named reasons
+- [x] R-203 G2 — documentation & write tools: rename, labels, comments, prototypes, variables, structure creation via the transactional mutation path (Execute-class, flowguard-gated); the 3 G1 not-implemented rows (add_memory_reference, remove_reference, list_open_programs per SPEC §4) resolve here or keep their named reasons
   - verify: cargo test
-  - evidence:
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T09:46:59Z
 - [ ] R-204 G3 — cross-binary documentation transfer: function-hash matching and documentation propagation, composing with fathom's evidence bundles; completeness scoring as a measured finding
   - verify: cargo test
   - evidence:
