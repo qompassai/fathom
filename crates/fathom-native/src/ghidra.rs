@@ -17,10 +17,12 @@ use crate::engine::{self, Export, FunctionInfo};
 
 pub mod detection;
 pub mod functions;
+pub mod mutate;
 pub mod program;
 pub(crate) mod query;
 pub mod search;
 pub mod types;
+pub mod write;
 pub mod xrefs;
 
 pub(crate) fn subject_and_export(
