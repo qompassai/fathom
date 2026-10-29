@@ -30,7 +30,7 @@ pub(crate) fn normalize_pattern(text: &str) -> Result<String, FathomError> {
             format!("byte pattern {text:?} {why}"),
         )
     };
-    if compact.is_empty() || compact.len() % 2 != 0 {
+    if compact.is_empty() || !compact.len().is_multiple_of(2) {
         return Err(refuse("must be whole hex byte pairs or ?? wildcards"));
     }
     let bytes = compact.len() / 2;
