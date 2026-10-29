@@ -121,7 +121,7 @@ fn provider_timeout_secs(first_import: bool) -> u64 {
 }
 
 /// SHA-256 of the export script the engine will run.
-fn script_digest(script_dir: &Path) -> Result<String, FathomError> {
+pub(crate) fn script_digest(script_dir: &Path) -> Result<String, FathomError> {
     let bytes = fs::read(script_dir.join("FathomExportAnalysis.java")).map_err(|e| {
         FathomError::new(
             ErrorCode::ProviderUnavailable,

@@ -704,8 +704,16 @@ mod tests {
         let subject_sha256 = sha256_hex(&target_bytes);
         let cache_dir = state_dir.join("ghidra").join(&subject_sha256[..32]);
         std::fs::create_dir_all(&cache_dir).unwrap();
+        // run_export keys every cached export by the script that
+        // wrote it; seed under that key or the lookup misses and
+        // the engine runs for real.
+        let script_key = engine::script_digest(&engine::locate_script_dir().unwrap()).unwrap();
         for (name, document) in exports {
-            std::fs::write(cache_dir.join(name), document).unwrap();
+            let stem = name
+                .strip_suffix(".json")
+                .expect("seeded export names end in .json");
+            let keyed = format!("{stem}-s{}.json", &script_key[..12]);
+            std::fs::write(cache_dir.join(keyed), document).unwrap();
         }
         let config = Config {
             allow_programs: Vec::new(),
