@@ -30,12 +30,6 @@ use std::sync::Arc;
 use fathom_core::policy::ToolClass;
 use fathom_core::registry::{Registry, descriptor, target_schema};
 
-/// SPEC anchor for read-core rows that would mutate the cached
-/// Ghidra project: the batch-export cache is keyed by subject
-/// SHA-256, not project revision, so a write would silently stale
-/// every cached export. The transactional mutation path is G2.
-const SPEC_MUTATION_PATH: &str = "§9.1 (mutation path: Ghidra G2)";
-
 /// The `{target}` schema plus the paging arguments the retained
 /// inventory reads accept (SPEC §9.1 read pattern).
 fn inventory_schema() -> serde_json::Value {
@@ -84,23 +78,44 @@ fn with_page(properties: Value) -> Value {
 /// Register the native provider's tools. Read-core rows that
 /// would write are registered not-implemented with their reason.
 pub fn register(registry: &mut Registry) {
-    registry.register_not_implemented(
+    registry.register(
+        descriptor(
+            "add_function_tag",
+            ToolClass::Execute,
+            "ghidra",
+            "Add a tag to a function (Execute; transactional G2 mutation path)",
+            target_and(
+                json!({"address": {"type": "string"}, "tag": {"type": "string"}}),
+                &["address", "tag"],
+            ),
+        ),
+        Arc::new(ghidra::write::add_function_tag),
+    );
+    registry.register(
         descriptor(
             "add_memory_reference",
             ToolClass::Execute,
             "ghidra",
-            "Add a memory reference — not implemented: writes to the cached project \
-             await the G2 mutation path",
+            "Add a memory reference between two addresses (Execute; transactional G2 mutation path)",
             target_and(
-                json!({
-                    "from": {"type": "string"},
-                    "to": {"type": "string"},
-                    "type": {"type": "string"},
-                }),
+                json!({"from": {"type": "string"}, "to": {"type": "string"}, "type": {"type": "string"}}),
                 &["from", "to"],
             ),
         ),
-        SPEC_MUTATION_PATH,
+        Arc::new(ghidra::write::add_memory_reference),
+    );
+    registry.register(
+        descriptor(
+            "add_struct_field",
+            ToolClass::Execute,
+            "ghidra",
+            "Add a field to a structure (Execute; transactional G2 mutation path)",
+            target_and(
+                json!({"field": {"type": "string"}, "struct": {"type": "string"}, "type": {"type": "string"}}),
+                &["field", "struct", "type"],
+            ),
+        ),
+        Arc::new(ghidra::write::add_struct_field),
     );
     registry.register(
         descriptor(
@@ -135,6 +150,84 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "apply_data_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Apply a data type at an address (Execute; transactional G2 mutation path)",
+            target_and(
+                json!({"address": {"type": "string"}, "type": {"type": "string"}}),
+                &["address", "type"],
+            ),
+        ),
+        Arc::new(ghidra::write::apply_data_type),
+    );
+    registry.register(
+        descriptor(
+            "batch_add_function_tags",
+            ToolClass::Execute,
+            "ghidra",
+            "Add tags to functions in one atomic batch (Execute; G2)",
+            target_and(
+                json!({"entries": {"type": "array", "items": {"type": "object"}}}),
+                &["entries"],
+            ),
+        ),
+        Arc::new(ghidra::write::batch_add_function_tags),
+    );
+    registry.register(
+        descriptor(
+            "batch_create_labels",
+            ToolClass::Execute,
+            "ghidra",
+            "Create labels in one atomic batch (Execute; G2)",
+            target_and(
+                json!({"labels": {"type": "array", "items": {"type": "object"}}}),
+                &["labels"],
+            ),
+        ),
+        Arc::new(ghidra::write::batch_create_labels),
+    );
+    registry.register(
+        descriptor(
+            "batch_delete_labels",
+            ToolClass::Execute,
+            "ghidra",
+            "Delete labels in one atomic batch (Execute; G2)",
+            target_and(
+                json!({"labels": {"type": "array", "items": {"type": "object"}}}),
+                &["labels"],
+            ),
+        ),
+        Arc::new(ghidra::write::batch_delete_labels),
+    );
+    registry.register(
+        descriptor(
+            "batch_remove_function_tags",
+            ToolClass::Execute,
+            "ghidra",
+            "Remove function tags in one atomic batch (Execute; G2)",
+            target_and(
+                json!({"entries": {"type": "array", "items": {"type": "object"}}}),
+                &["entries"],
+            ),
+        ),
+        Arc::new(ghidra::write::batch_remove_function_tags),
+    );
+    registry.register(
+        descriptor(
+            "batch_set_comments",
+            ToolClass::Execute,
+            "ghidra",
+            "Set comments in one atomic batch (Execute; G2)",
+            target_and(
+                json!({"comments": {"type": "array", "items": {"type": "object"}}}),
+                &["comments"],
+            ),
+        ),
+        Arc::new(ghidra::write::batch_set_comments),
+    );
+    registry.register(
+        descriptor(
             "binary_overview",
             ToolClass::Read,
             "ghidra",
@@ -142,6 +235,29 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::binary_overview),
+    );
+    registry.register(
+        descriptor(
+            "clear_function_comments",
+            ToolClass::Execute,
+            "ghidra",
+            "Clear every comment inside a function body (Execute; G2)",
+            target_and(json!({"address": {"type": "string"}}), &["address"]),
+        ),
+        Arc::new(ghidra::write::clear_function_comments),
+    );
+    registry.register(
+        descriptor(
+            "clone_data_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Clone a data type under a new name (Execute; G2)",
+            target_and(
+                json!({"new_name": {"type": "string"}, "source": {"type": "string"}}),
+                &["new_name", "source"],
+            ),
+        ),
+        Arc::new(ghidra::write::clone_data_type),
     );
     registry.register(
         descriptor(
@@ -160,6 +276,189 @@ pub fn register(registry: &mut Registry) {
             }),
         ),
         Arc::new(ghidra::search::convert_number),
+    );
+    registry.register(
+        descriptor(
+            "create_array_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Create an array data type (Execute; G2)",
+            target_and(
+                json!({"base_type": {"type": "string"}, "count": {"type": "integer", "minimum": 1}}),
+                &["base_type", "count"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_array_type),
+    );
+    registry.register(
+        descriptor(
+            "create_data_type_category",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a data type category path (Execute; G2)",
+            target_and(json!({"path": {"type": "string"}}), &["path"]),
+        ),
+        Arc::new(ghidra::write::create_data_type_category),
+    );
+    registry.register(
+        descriptor(
+            "create_enum",
+            ToolClass::Execute,
+            "ghidra",
+            "Create an enum data type from name/value pairs (Execute; G2)",
+            target_and(
+                json!({"name": {"type": "string"}, "values": {"type": "array", "items": {"type": "object"}}}),
+                &["name", "values"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_enum),
+    );
+    registry.register(
+        descriptor(
+            "create_function",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a function at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "name": {"type": "string"}}),
+                &["address", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_function),
+    );
+    registry.register(
+        descriptor(
+            "create_function_signature",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a function-signature data type from a prototype (Execute; G2)",
+            target_and(
+                json!({"name": {"type": "string"}, "prototype": {"type": "string"}}),
+                &["name", "prototype"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_function_signature),
+    );
+    registry.register(
+        descriptor(
+            "create_function_tag",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a function tag, optionally with a comment (Execute; G2)",
+            target_and(
+                json!({"comment": {"type": "string"}, "name": {"type": "string"}}),
+                &["name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_function_tag),
+    );
+    registry.register(
+        descriptor(
+            "create_label",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a label at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "name": {"type": "string"}}),
+                &["address", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_label),
+    );
+    registry.register(
+        descriptor(
+            "create_pointer_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a pointer data type (Execute; G2)",
+            target_and(json!({"base_type": {"type": "string"}}), &["base_type"]),
+        ),
+        Arc::new(ghidra::write::create_pointer_type),
+    );
+    registry.register(
+        descriptor(
+            "create_struct",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a structure from name/type fields (Execute; G2)",
+            target_and(
+                json!({"fields": {"type": "array", "items": {"type": "object"}}, "name": {"type": "string"}}),
+                &["fields", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_struct),
+    );
+    registry.register(
+        descriptor(
+            "create_typedef",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a typedef over a base type (Execute; G2)",
+            target_and(
+                json!({"base_type": {"type": "string"}, "name": {"type": "string"}}),
+                &["base_type", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_typedef),
+    );
+    registry.register(
+        descriptor(
+            "create_union",
+            ToolClass::Execute,
+            "ghidra",
+            "Create a union from name/type fields (Execute; G2)",
+            target_and(
+                json!({"fields": {"type": "array", "items": {"type": "object"}}, "name": {"type": "string"}}),
+                &["fields", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::create_union),
+    );
+    registry.register(
+        descriptor(
+            "delete_bookmark",
+            ToolClass::Execute,
+            "ghidra",
+            "Delete a bookmark at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "category": {"type": "string"}, "type": {"type": "string"}}),
+                &["address", "category"],
+            ),
+        ),
+        Arc::new(ghidra::write::delete_bookmark),
+    );
+    registry.register(
+        descriptor(
+            "delete_data_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Delete a program data type (Execute; G2)",
+            target_and(json!({"name": {"type": "string"}}), &["name"]),
+        ),
+        Arc::new(ghidra::write::delete_data_type),
+    );
+    registry.register(
+        descriptor(
+            "delete_function",
+            ToolClass::Execute,
+            "ghidra",
+            "Delete the function at an address (Execute; G2)",
+            target_and(json!({"address": {"type": "string"}}), &["address"]),
+        ),
+        Arc::new(ghidra::write::delete_function),
+    );
+    registry.register(
+        descriptor(
+            "delete_label",
+            ToolClass::Execute,
+            "ghidra",
+            "Delete a label at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "name": {"type": "string"}}),
+                &["address", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::delete_label),
     );
     registry.register(
         descriptor(
@@ -920,6 +1219,32 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "modify_struct_field",
+            ToolClass::Execute,
+            "ghidra",
+            "Change one structure field's type (Execute; G2)",
+            target_and(
+                json!({"field": {"type": "string"}, "new_type": {"type": "string"}, "struct": {"type": "string"}}),
+                &["field", "new_type", "struct"],
+            ),
+        ),
+        Arc::new(ghidra::write::modify_struct_field),
+    );
+    registry.register(
+        descriptor(
+            "move_data_type_to_category",
+            ToolClass::Execute,
+            "ghidra",
+            "Move a data type into a category (Execute; G2)",
+            target_and(
+                json!({"category": {"type": "string"}, "name": {"type": "string"}}),
+                &["category", "name"],
+            ),
+        ),
+        Arc::new(ghidra::write::move_data_type_to_category),
+    );
+    registry.register(
+        descriptor(
             "project_info",
             ToolClass::Read,
             "ghidra",
@@ -928,19 +1253,135 @@ pub fn register(registry: &mut Registry) {
         ),
         Arc::new(ghidra::program::project_info),
     );
-    registry.register_not_implemented(
+    registry.register(
+        descriptor(
+            "remove_function_tag",
+            ToolClass::Execute,
+            "ghidra",
+            "Remove a tag from a function (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "tag": {"type": "string"}}),
+                &["address", "tag"],
+            ),
+        ),
+        Arc::new(ghidra::write::remove_function_tag),
+    );
+    registry.register(
         descriptor(
             "remove_reference",
             ToolClass::Execute,
             "ghidra",
-            "Remove a reference — not implemented: writes to the cached project \
-             await the G2 mutation path",
+            "Remove the references between two addresses (Execute; transactional G2 mutation path)",
             target_and(
                 json!({"from": {"type": "string"}, "to": {"type": "string"}}),
                 &["from", "to"],
             ),
         ),
-        SPEC_MUTATION_PATH,
+        Arc::new(ghidra::write::remove_reference),
+    );
+    registry.register(
+        descriptor(
+            "remove_struct_field",
+            ToolClass::Execute,
+            "ghidra",
+            "Remove one structure field (Execute; G2)",
+            target_and(
+                json!({"field": {"type": "string"}, "struct": {"type": "string"}}),
+                &["field", "struct"],
+            ),
+        ),
+        Arc::new(ghidra::write::remove_struct_field),
+    );
+    registry.register(
+        descriptor(
+            "rename_data",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename the data symbol at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["address", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_data),
+    );
+    registry.register(
+        descriptor(
+            "rename_data_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename a data type (Execute; G2)",
+            target_and(
+                json!({"name": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["name", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_data_type),
+    );
+    registry.register(
+        descriptor(
+            "rename_function",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename a function by its address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["address", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_function),
+    );
+    registry.register(
+        descriptor(
+            "rename_function_by_address",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename the function at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["address", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_function_by_address),
+    );
+    registry.register(
+        descriptor(
+            "rename_global_variable",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename the global symbol at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["address", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_global_variable),
+    );
+    registry.register(
+        descriptor(
+            "rename_label",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename the primary label at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "new_name": {"type": "string"}}),
+                &["address", "new_name"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_label),
+    );
+    registry.register(
+        descriptor(
+            "rename_variable",
+            ToolClass::Execute,
+            "ghidra",
+            "Rename a function variable (Execute; G2)",
+            target_and(
+                json!({"function": {"type": "string"}, "new_name": {"type": "string"}, "variable": {"type": "string"}}),
+                &["function", "new_name", "variable"],
+            ),
+        ),
+        Arc::new(ghidra::write::rename_variable),
     );
     registry.register(
         descriptor(
@@ -1008,6 +1449,146 @@ pub fn register(registry: &mut Registry) {
             }),
         ),
         Arc::new(ghidra::search_inventory),
+    );
+    registry.register(
+        descriptor(
+            "set_bookmark",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a bookmark at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "category": {"type": "string"}, "comment": {"type": "string"}, "type": {"type": "string"}}),
+                &["address", "category", "comment"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_bookmark),
+    );
+    registry.register(
+        descriptor(
+            "set_comment",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a comment (eol/plate/post/pre/repeatable) at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "text": {"type": "string"}, "type": {"type": "string"}}),
+                &["address", "text"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_comment),
+    );
+    registry.register(
+        descriptor(
+            "set_decompiler_comment",
+            ToolClass::Execute,
+            "ghidra",
+            "Set the decompiler (EOL) comment at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "text": {"type": "string"}}),
+                &["address", "text"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_decompiler_comment),
+    );
+    registry.register(
+        descriptor(
+            "set_decompiler_variable_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a decompiler variable's type (Execute; G2)",
+            target_and(
+                json!({"function": {"type": "string"}, "type": {"type": "string"}, "variable": {"type": "string"}}),
+                &["function", "type", "variable"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_decompiler_variable_type),
+    );
+    registry.register(
+        descriptor(
+            "set_disassembly_comment",
+            ToolClass::Execute,
+            "ghidra",
+            "Set the disassembly (EOL) comment at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "text": {"type": "string"}}),
+                &["address", "text"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_disassembly_comment),
+    );
+    registry.register(
+        descriptor(
+            "set_function_no_return",
+            ToolClass::Execute,
+            "ghidra",
+            "Mark a function as no-return (Execute; G2)",
+            target_and(json!({"address": {"type": "string"}}), &["address"]),
+        ),
+        Arc::new(ghidra::write::set_function_no_return),
+    );
+    registry.register(
+        descriptor(
+            "set_function_prototype",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a function's prototype from a C signature (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "prototype": {"type": "string"}}),
+                &["address", "prototype"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_function_prototype),
+    );
+    registry.register(
+        descriptor(
+            "set_function_tag_comment",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a function tag's comment (Execute; G2)",
+            target_and(
+                json!({"comment": {"type": "string"}, "tag": {"type": "string"}}),
+                &["comment", "tag"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_function_tag_comment),
+    );
+    registry.register(
+        descriptor(
+            "set_local_variable_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Set a local variable's type (Execute; G2)",
+            target_and(
+                json!({"function": {"type": "string"}, "type": {"type": "string"}, "variable": {"type": "string"}}),
+                &["function", "type", "variable"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_local_variable_type),
+    );
+    registry.register(
+        descriptor(
+            "set_parameter_type",
+            ToolClass::Execute,
+            "ghidra",
+            "Set one parameter's type by index (Execute; G2)",
+            target_and(
+                json!({"function": {"type": "string"}, "index": {"type": "integer", "minimum": 0}, "type": {"type": "string"}}),
+                &["function", "index", "type"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_parameter_type),
+    );
+    registry.register(
+        descriptor(
+            "set_plate_comment",
+            ToolClass::Execute,
+            "ghidra",
+            "Set the plate comment at an address (Execute; G2)",
+            target_and(
+                json!({"address": {"type": "string"}, "text": {"type": "string"}}),
+                &["address", "text"],
+            ),
+        ),
+        Arc::new(ghidra::write::set_plate_comment),
     );
     registry.register(
         descriptor(

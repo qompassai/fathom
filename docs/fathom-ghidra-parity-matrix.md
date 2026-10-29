@@ -37,12 +37,12 @@ names (279) as the row set per Pax ruling.
 
 | Status | Count |
 |--------|------:|
-| HAVE | 31 |
-| BUILD | 177 |
+| HAVE | 80 |
+| BUILD | 128 |
 | DEFER | 71 |
 | **TOTAL rows** | **279** |
 
-BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
+BUILD by study stage: G1=76, G2=35, G3=15, G4=2.
 
 `observe_browser` remains a fathom NotImplemented scaffold and is **not** cited as HAVE
 (conformance drift for the gate).
@@ -51,9 +51,9 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 
 | # | Ghidra-MCP tool | Category | Status | Fathom tool | Stage | Note / defer reason |
 |--:|-----------------|----------|--------|-------------|-------|---------------------|
-| 1 | `add_function_tag` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 2 | `add_memory_reference` | Cross-References | BUILD | — | G1 | — |
-| 3 | `add_struct_field` | Data Types & Structures | BUILD | — | G2 | — |
+| 1 | `add_function_tag` | Function Tags, Variables & Attributes | HAVE | `add_function_tag` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 2 | `add_memory_reference` | Cross-References | HAVE | `add_memory_reference` | G1 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 3 | `add_struct_field` | Data Types & Structures | HAVE | `add_struct_field` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 4 | `analysis_status` | Program & Session Management | BUILD | — | G1 | — |
 | 5 | `analyze_api_call_chains` | Analysis | BUILD | — | G1 | — |
 | 6 | `analyze_call_graph` | Analysis | BUILD | — | G1 | — |
@@ -66,22 +66,22 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 13 | `analyze_global_completeness` | Data Types & Structures | BUILD | — | G2 | — |
 | 14 | `analyze_struct_field_usage` | Analysis | BUILD | — | G1 | — |
 | 15 | `apply_data_classification` | Analysis | BUILD | — | G2 | — |
-| 16 | `apply_data_type` | Data Types & Structures | BUILD | — | G2 | — |
+| 16 | `apply_data_type` | Data Types & Structures | HAVE | `apply_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 17 | `apply_function_documentation` | Utility & Documentation Transfer | BUILD | — | G3 | — |
 | 18 | `archive_ingest_function` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
 | 19 | `archive_ingest_program` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
 | 20 | `archive_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 21 | `audit_global` | Data Types & Structures | BUILD | — | G2 | — |
 | 22 | `audit_globals_in_function` | Data Types & Structures | BUILD | — | G2 | — |
-| 23 | `batch_add_function_tags` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
+| 23 | `batch_add_function_tags` | Function Tags, Variables & Attributes | HAVE | `batch_add_function_tags` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 24 | `batch_analyze_completeness` | Analysis | BUILD | — | G1 | — |
 | 25 | `batch_apply_documentation` | Analysis | BUILD | — | G1 | — |
-| 26 | `batch_create_labels` | Renaming & Labels | BUILD | — | G2 | — |
+| 26 | `batch_create_labels` | Renaming & Labels | HAVE | `batch_create_labels` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 27 | `batch_decompile` | Analysis | BUILD | — | G1 | — |
-| 28 | `batch_delete_labels` | Renaming & Labels | BUILD | — | G2 | — |
-| 29 | `batch_remove_function_tags` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
+| 28 | `batch_delete_labels` | Renaming & Labels | HAVE | `batch_delete_labels` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 29 | `batch_remove_function_tags` | Function Tags, Variables & Attributes | HAVE | `batch_remove_function_tags` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 30 | `batch_rename_function_components` | Renaming & Labels | BUILD | — | G2 | — |
-| 31 | `batch_set_comments` | Comments & Bookmarks | BUILD | — | G2 | — |
+| 31 | `batch_set_comments` | Comments & Bookmarks | HAVE | `batch_set_comments` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 32 | `batch_set_variable_types` | Data Types & Structures | BUILD | — | G2 | — |
 | 33 | `batch_string_anchor_report` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
 | 34 | `bulk_fuzzy_match` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
@@ -90,30 +90,30 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 37 | `check_tools` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
 | 38 | `checkin_program` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 39 | `clear_flow_and_repair` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 40 | `clear_function_comments` | Comments & Bookmarks | BUILD | — | G2 | — |
+| 40 | `clear_function_comments` | Comments & Bookmarks | HAVE | `clear_function_comments` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 41 | `clear_instruction_flow_override` | Analysis | BUILD | — | G2 | — |
-| 42 | `clone_data_type` | Data Types & Structures | BUILD | — | G2 | — |
+| 42 | `clone_data_type` | Data Types & Structures | HAVE | `clone_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 43 | `close_program` | Program & Session Management | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 44 | `close_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 45 | `compare_programs_documentation` | Utility & Documentation Transfer | BUILD | — | G3 | — |
 | 46 | `configure_analyzer` | Analysis | BUILD | — | G2 | — |
 | 47 | `connect_instance` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
 | 48 | `convert_number` | Utility & Documentation Transfer | BUILD | — | G1 | — |
-| 49 | `create_array_type` | Data Types & Structures | BUILD | — | G2 | — |
-| 50 | `create_data_type_category` | Data Types & Structures | BUILD | — | G2 | — |
-| 51 | `create_enum` | Data Types & Structures | BUILD | — | G2 | — |
+| 49 | `create_array_type` | Data Types & Structures | HAVE | `create_array_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 50 | `create_data_type_category` | Data Types & Structures | HAVE | `create_data_type_category` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 51 | `create_enum` | Data Types & Structures | HAVE | `create_enum` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 52 | `create_folder` | Project Organization | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
-| 53 | `create_function` | Analysis | BUILD | — | G2 | — |
-| 54 | `create_function_signature` | Data Types & Structures | BUILD | — | G2 | — |
-| 55 | `create_function_tag` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 56 | `create_label` | Renaming & Labels | BUILD | — | G2 | — |
+| 53 | `create_function` | Analysis | HAVE | `create_function` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 54 | `create_function_signature` | Data Types & Structures | HAVE | `create_function_signature` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 55 | `create_function_tag` | Function Tags, Variables & Attributes | HAVE | `create_function_tag` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 56 | `create_label` | Renaming & Labels | HAVE | `create_label` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 57 | `create_memory_block` | Analysis | BUILD | — | G2 | — |
-| 58 | `create_pointer_type` | Data Types & Structures | BUILD | — | G2 | — |
+| 58 | `create_pointer_type` | Data Types & Structures | HAVE | `create_pointer_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 59 | `create_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 60 | `create_property_map` | Program & Session Management | BUILD | — | G2 | — |
-| 61 | `create_struct` | Data Types & Structures | BUILD | — | G2 | — |
-| 62 | `create_typedef` | Data Types & Structures | BUILD | — | G2 | — |
-| 63 | `create_union` | Data Types & Structures | BUILD | — | G2 | — |
+| 61 | `create_struct` | Data Types & Structures | HAVE | `create_struct` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 62 | `create_typedef` | Data Types & Structures | HAVE | `create_typedef` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 63 | `create_union` | Data Types & Structures | HAVE | `create_union` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 64 | `debugger_dynamic_to_static` | Debugger (Ghidra TraceRmi — GUI only) | DEFER | — | — | TraceRmi live debugging — outside fathom headless posture (study §Staging) |
 | 65 | `debugger_interrupt` | Debugger (Ghidra TraceRmi — GUI only) | DEFER | — | — | TraceRmi live debugging — outside fathom headless posture (study §Staging) |
 | 66 | `debugger_launch` | Debugger (Ghidra TraceRmi — GUI only) | DEFER | — | — | TraceRmi live debugging — outside fathom headless posture (study §Staging) |
@@ -133,12 +133,12 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 80 | `debugger_step_over` | Debugger (Ghidra TraceRmi — GUI only) | DEFER | — | — | TraceRmi live debugging — outside fathom headless posture (study §Staging) |
 | 81 | `debugger_traces` | Debugger (Ghidra TraceRmi — GUI only) | DEFER | — | — | TraceRmi live debugging — outside fathom headless posture (study §Staging) |
 | 82 | `decompile_function` | Decompilation & Disassembly | HAVE | `analyze_function` | — | partial — bounded decompile inside analyze_function dossier |
-| 83 | `delete_bookmark` | Comments & Bookmarks | BUILD | — | G2 | — |
-| 84 | `delete_data_type` | Data Types & Structures | BUILD | — | G2 | — |
+| 83 | `delete_bookmark` | Comments & Bookmarks | HAVE | `delete_bookmark` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 84 | `delete_data_type` | Data Types & Structures | HAVE | `delete_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 85 | `delete_file` | Project Organization | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
-| 86 | `delete_function` | Analysis | BUILD | — | G2 | — |
-| 87 | `delete_function_tag` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 88 | `delete_label` | Renaming & Labels | BUILD | — | G2 | — |
+| 86 | `delete_function` | Analysis | HAVE | `delete_function` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 87 | `delete_function_tag` | Function Tags, Variables & Attributes | BUILD | — | G2 | deferred with reason (G2): Ghidra 12.1.2 `FunctionTagManager` has no delete operation — the bridge's tool has no public-API counterpart |
+| 88 | `delete_label` | Renaming & Labels | HAVE | `delete_label` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 89 | `delete_project` | Project Organization | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 90 | `delete_property_map` | Program & Session Management | BUILD | — | G2 | — |
 | 91 | `detect_array_bounds` | Analysis | BUILD | — | G1 | — |
@@ -226,7 +226,7 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 173 | `list_instances` | Bridge Static Tools | DEFER | — | — | Bridge-instance tooling for bethington Python bridge; fathom is its own MCP server (no-second-engine) |
 | 174 | `list_methods` | Listing & Enumeration | HAVE | `list_functions` | — | partial — name listing covered |
 | 175 | `list_namespaces` | Listing & Enumeration | BUILD | — | G1 | — |
-| 176 | `list_open_programs` | Program & Session Management | BUILD | — | G1 | — |
+| 176 | `list_open_programs` | Program & Session Management | BUILD | — | G1 | keeps its named reason (SPEC §4): fathom is stateless per call — no session-held open programs to list |
 | 177 | `list_option_groups` | Program & Session Management | BUILD | — | G1 | — |
 | 178 | `list_project_files` | Program & Session Management | BUILD | — | G1 | — |
 | 179 | `list_projects` | Project Organization | BUILD | — | G1 | — |
@@ -242,9 +242,9 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 189 | `mcp_health` | Utility & Documentation Transfer | HAVE | `session_info` | — | partial — pool/uptime fields not in fathom |
 | 190 | `mcp_schema` | Utility & Documentation Transfer | HAVE | `session_info` | — | partial — catalog via tools/list + session_info |
 | 191 | `merge_program_documentation` | Cross-Binary Documentation & Archive | BUILD | — | G3 | — |
-| 192 | `modify_struct_field` | Data Types & Structures | BUILD | — | G2 | — |
+| 192 | `modify_struct_field` | Data Types & Structures | HAVE | `modify_struct_field` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 193 | `modify_struct_field_type` | Data Types & Structures | BUILD | — | G2 | — |
-| 194 | `move_data_type_to_category` | Data Types & Structures | BUILD | — | G2 | — |
+| 194 | `move_data_type_to_category` | Data Types & Structures | HAVE | `move_data_type_to_category` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 195 | `move_file` | Project Organization | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 196 | `move_folder` | Project Organization | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 197 | `open_program` | Program & Session Management | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
@@ -254,27 +254,27 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 201 | `read_memory` | Analysis | HAVE | `inspect_binary_layout` | — | partial — layout/mitigations; not arbitrary address read |
 | 202 | `reanalyze` | Program & Session Management | BUILD | — | G2 | — |
 | 203 | `recreate_struct` | Data Types & Structures | BUILD | — | G2 | — |
-| 204 | `remove_function_tag` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
+| 204 | `remove_function_tag` | Function Tags, Variables & Attributes | HAVE | `remove_function_tag` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 205 | `remove_program_option` | Program & Session Management | BUILD | — | G2 | — |
 | 206 | `remove_property` | Program & Session Management | BUILD | — | G2 | — |
-| 207 | `remove_reference` | Cross-References | BUILD | — | G1 | — |
-| 208 | `remove_struct_field` | Data Types & Structures | BUILD | — | G2 | — |
-| 209 | `rename_data` | Renaming & Labels | BUILD | — | G2 | — |
-| 210 | `rename_data_type` | Data Types & Structures | BUILD | — | G2 | — |
+| 207 | `remove_reference` | Cross-References | HAVE | `remove_reference` | G1 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 208 | `remove_struct_field` | Data Types & Structures | HAVE | `remove_struct_field` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 209 | `rename_data` | Renaming & Labels | HAVE | `rename_data` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 210 | `rename_data_type` | Data Types & Structures | HAVE | `rename_data_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 211 | `rename_external_location` | Renaming & Labels | BUILD | — | G2 | — |
-| 212 | `rename_function` | Renaming & Labels | BUILD | — | G2 | — |
-| 213 | `rename_function_by_address` | Renaming & Labels | BUILD | — | G2 | — |
-| 214 | `rename_global_variable` | Renaming & Labels | BUILD | — | G2 | — |
-| 215 | `rename_label` | Renaming & Labels | BUILD | — | G2 | — |
+| 212 | `rename_function` | Renaming & Labels | HAVE | `rename_function` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 213 | `rename_function_by_address` | Renaming & Labels | HAVE | `rename_function_by_address` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 214 | `rename_global_variable` | Renaming & Labels | HAVE | `rename_global_variable` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 215 | `rename_label` | Renaming & Labels | HAVE | `rename_label` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 216 | `rename_or_label` | Renaming & Labels | BUILD | — | G2 | — |
-| 217 | `rename_variable` | Renaming & Labels | BUILD | — | G2 | — |
+| 217 | `rename_variable` | Renaming & Labels | HAVE | `rename_variable` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 218 | `rename_variables` | Renaming & Labels | BUILD | — | G2 | — |
-| 219 | `resize_struct` | Data Types & Structures | BUILD | — | G2 | — |
+| 219 | `resize_struct` | Data Types & Structures | BUILD | — | G2 | deferred with reason (G2): no direct Composite length setter in the 12.1.2 API surface used by the mutation script |
 | 220 | `resolve_duplicate_type` | Data Types & Structures | BUILD | — | G2 | — |
 | 221 | `restore_project` | Headless Project & Program Lifecycle | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 222 | `run_analysis` | Analysis | BUILD | — | G2 | — |
-| 223 | `run_ghidra_script` | Scripting | BUILD | — | G2 | — |
-| 224 | `run_script_inline` | Scripting | BUILD | — | G2 | — |
+| 223 | `run_ghidra_script` | Scripting | BUILD | — | G2 | deferred with reason (G2): unbounded execute surface, contrary to the bounded G2 tool surface |
+| 224 | `run_script_inline` | Scripting | BUILD | — | G2 | deferred with reason (G2): unbounded execute surface, contrary to the bounded G2 tool surface |
 | 225 | `save_all_programs` | Program & Session Management | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 226 | `save_program` | Program & Session Management | DEFER | — | — | Stateful project/session lifecycle — fathom uses its own per-subject SHA-256 project cache via analyzeHeadless (study §Where fathom already stands) |
 | 227 | `search_byte_patterns` | Search | BUILD | — | G1 | — |
@@ -303,20 +303,20 @@ BUILD by study stage: G1=78, G2=82, G3=15, G4=2.
 | 250 | `server_version_control_checkout` | Ghidra Server & Version Control | DEFER | — | — | Ghidra Server collaboration — no estate Ghidra Server (study §Staging) |
 | 251 | `server_version_control_undo_checkout` | Ghidra Server & Version Control | DEFER | — | — | Ghidra Server collaboration — no estate Ghidra Server (study §Staging) |
 | 252 | `server_version_history` | Ghidra Server & Version Control | DEFER | — | — | Ghidra Server collaboration — no estate Ghidra Server (study §Staging) |
-| 253 | `set_bookmark` | Comments & Bookmarks | BUILD | — | G2 | — |
-| 254 | `set_comment` | Comments & Bookmarks | BUILD | — | G2 | — |
-| 255 | `set_decompiler_comment` | Comments & Bookmarks | BUILD | — | G2 | — |
-| 256 | `set_decompiler_variable_type` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 257 | `set_disassembly_comment` | Comments & Bookmarks | BUILD | — | G2 | — |
-| 258 | `set_function_no_return` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
-| 259 | `set_function_prototype` | Data Types & Structures | BUILD | — | G2 | — |
-| 260 | `set_function_tag_comment` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
+| 253 | `set_bookmark` | Comments & Bookmarks | HAVE | `set_bookmark` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 254 | `set_comment` | Comments & Bookmarks | HAVE | `set_comment` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 255 | `set_decompiler_comment` | Comments & Bookmarks | HAVE | `set_decompiler_comment` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 256 | `set_decompiler_variable_type` | Function Tags, Variables & Attributes | HAVE | `set_decompiler_variable_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 257 | `set_disassembly_comment` | Comments & Bookmarks | HAVE | `set_disassembly_comment` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 258 | `set_function_no_return` | Function Tags, Variables & Attributes | HAVE | `set_function_no_return` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 259 | `set_function_prototype` | Data Types & Structures | HAVE | `set_function_prototype` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 260 | `set_function_tag_comment` | Function Tags, Variables & Attributes | HAVE | `set_function_tag_comment` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 261 | `set_function_this_type` | Function Tags, Variables & Attributes | BUILD | — | G2 | — |
 | 262 | `set_global` | Data Types & Structures | BUILD | — | G2 | — |
 | 263 | `set_image_base` | Program & Session Management | BUILD | — | G2 | — |
-| 264 | `set_local_variable_type` | Data Types & Structures | BUILD | — | G2 | — |
-| 265 | `set_parameter_type` | Data Types & Structures | BUILD | — | G2 | — |
-| 266 | `set_plate_comment` | Comments & Bookmarks | BUILD | — | G2 | — |
+| 264 | `set_local_variable_type` | Data Types & Structures | HAVE | `set_local_variable_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 265 | `set_parameter_type` | Data Types & Structures | HAVE | `set_parameter_type` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
+| 266 | `set_plate_comment` | Comments & Bookmarks | HAVE | `set_plate_comment` | G2 | landed G2 — transactional mutation path (Execute-class, flowguard decide()) |
 | 267 | `set_program_option` | Program & Session Management | BUILD | — | G2 | — |
 | 268 | `set_property` | Program & Session Management | BUILD | — | G2 | — |
 | 269 | `set_variable_storage` | Data Types & Structures | BUILD | — | G2 | — |
@@ -390,3 +390,45 @@ headless, dot-free state dir `~/fathom-state`): all ten tools above
 answered with real fixture data — PASS (brief minimum was
 `binary_overview` + `list_functions`).
 
+
+## G2 landing + live differential (2026-10-29)
+
+49 write/documentation tools landed on the transactional mutation path
+(copy-on-write project swap; one Ghidra transaction per batch; per-op
+verified postconditions; commit only on the script's `committed`
+result; any failure discards the copy and the cached project is
+re-hashed — mismatch escalates to `ArtifactIntegrityMismatch`). All 49
+are Execute-class: `decide()` default-deny, per-session `allow_tools`
+enable, typed refusals. The 2 G1-stage rows `add_memory_reference` /
+`remove_reference` resolve here; `list_open_programs` keeps its named
+stateless reason. Unlanded with reasons: `delete_function_tag`,
+`resize_struct`, `run_ghidra_script`, `run_script_inline` (row notes).
+
+**Verdict: DIFFERENTIAL PASS — zero unresolved discrepancies.**
+Throwaway bridge project `FxDiff2` (same fixtures, bridge writes are
+its normal GUI operation on that project only); fathom writes on its
+own cached copies; post-write read-backs compared per family:
+
+| Family | Verdict | Evidence / adjudication |
+|---|---|---|
+| comment (`set_comment`) | AGREE | both read back `g2 differential comment` (EOL) at `0010115d` |
+| plate_comment | AGREE | both read back `g2 plate` |
+| rename_function | AGREE | `compute_loop` → `compute_loop_g2` both sides |
+| rename_variable | AGREE | bridge param renamed to `g2_param`, read-back `['g2_param', 'step']` matches fathom end state |
+| prototype (`set_function_prototype`) | AGREE | bridge decompile head `long compute_loop_g2(int count,long step)` matches fathom's applied prototype |
+| label (`create_label`) | AGREE | `g2_loop_entry` @ `0010115d`, USER_DEFINED |
+| bookmark (`set_bookmark`) | AGREE with adjudicated diff | bridge tool has no `type` field (Note implied); category `g2cat` + comment agree |
+| function_tag (create + add) | AGREE | tag `g2tag` read back on the function both sides |
+| memory_reference (add + remove) | AGREE | add from `main`, xrefs read-back, remove reports `removed: 1` |
+| struct create + add field | AGREE with adjudicated diff | layout agrees (x int@0, y int@4, z long@8, size 16). Bridge-side "strict naming enforcement" renames fields `x→nX`, `y→nY`, `z→nZ` — bridge convention, not a semantic difference. Bridge `create_struct.fields` is a string holding a JSON array (its error text is the spec) |
+| struct modify field type | AGREE with adjudicated diff | addressed as `nZ` after the bridge's rename: field at offset 8 becomes `short` (size 2) both sides; the bridge drops the field name to `(unnamed)` and keeps struct size 16, as does Ghidra's replaceComponent on the fathom side |
+| apply_data_type | AGREE | `int` applied at `00100000` both sides, value `0x464c457f` |
+
+Fathom-side harness: 40 PASS / 0 FAIL, including adversarial rows —
+mid-batch failure rolls back with the project tree hash identical
+before/after, a held mutation lock yields typed `revision_conflict`
+with the project unchanged, and a deny-config server refuses with
+`access_denied` before any project exists. Comment-class mapping note:
+Ghidra's `CommentType` has no decompiler/disassembly kinds; fathom's
+`set_decompiler_comment` / `set_disassembly_comment` map to EOL in the
+mutation script (documented in-tool).
