@@ -13,7 +13,7 @@ path = "src/main.rs"
 [dependencies]
 axum.workspace = true
 clap.workspace = true
-fathom-a2a = { path = "../fathom-a2a" }
+fathom-a2a = { version = "1.0.0", path = "../fathom-a2a" }
 fathom-art = { version = "1.0.0", path = "../fathom-art" }
 fathom-core = { version = "1.0.0", path = "../fathom-core" }
 fathom-js = { version = "1.0.0", path = "../fathom-js" }
