@@ -80,12 +80,26 @@ matrix: TraceRmi live debugging and Ghidra Server collaboration.
   - evidence:
 
 ## Phase 6 — Release v1
-- [ ] R-601 Version is bumped to 1.0.0 and the changelog records the release
+- [x] R-601 Version is bumped to 1.0.0 and the changelog records the release
   - verify: grep -q 'version = "1.0.0"' Cargo.toml
-  - evidence:
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T10:51:56Z
 - [ ] R-602 Clean-environment install and run is verified
   - verify: cargo build
   - evidence:
 - [ ] R-603 Release artefacts are built from a clean checkout and checksummed
   - verify: cargo build
   - evidence:
+
+## Phase 7 — 1.0 coherence (2026-10-29 night, G-F2/F3/F4 + D-297)
+- [x] R-701 D-297 rename: crate fathom-mcp -> fathom-mcp-server (registry identity ai.qompass/fathom unchanged)
+  - verify: grep -q 'name = "fathom-mcp-server"' crates/fathom-mcp/Cargo.toml
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T10:51:56Z
+- [x] R-702 G-F3 dispositions: witness bundle, web-RE, and YouTube-RE Y3-Y5 deferred visibly with their open Owner/spec-gate questions named; BEAM opcode decode and NativeAOT graph honest partials carried in COMPLIANCE's deferred list
+  - verify: grep -q 'Deferred at 1.0.0' COMPLIANCE.md
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T10:51:56Z
+- [x] R-703 G-F4 utilization: one real-artifact RE session per landed stage family (archive, process, video) plus one Ghidra-engine session, filed in UTILIZATION.md
+  - verify: test -f UTILIZATION.md
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T10:51:56Z
+- [x] R-704 EFLO: the 158-tool tools/list measured with a real tokenizer (cl100k_base) and dispositioned in EFLO.md
+  - verify: test -f EFLO.md
+  - evidence: 1 verify commands, all exit 0 at 2026-10-29T10:51:56Z
