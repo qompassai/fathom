@@ -477,7 +477,7 @@ public class FathomExportAnalysis extends GhidraScript {
 
     private static final java.util.Set<String> READ_CORE_MODES = new java.util.TreeSet<>(
         java.util.Arrays.asList("addresses", "bytes", "callgraph", "decompile", "detail",
-            "disasm", "insns", "program", "types"));
+            "disasm", "insns", "program", "transfer", "types"));
 
     private static final CommentType[] COMMENT_TYPES = {
         CommentType.EOL, CommentType.PLATE, CommentType.POST, CommentType.PRE,
@@ -517,6 +517,9 @@ public class FathomExportAnalysis extends GhidraScript {
                 break;
             case "program":
                 appendProgramFacts(json);
+                break;
+            case "transfer":
+                appendTransfer(json);
                 break;
             case "types":
                 appendTypes(json);
@@ -693,6 +696,144 @@ public class FathomExportAnalysis extends GhidraScript {
                     .done());
             }
         }
+    }
+
+    // ---- transfer: per-function SHA-256 hashes (over the
+    // concatenated instruction bytes in address order) plus the
+    // full documentation set per function (G3). Offsets are
+    // entry-relative so a doc set survives a different image base
+    // in the target binary.
+
+    private void appendTransfer(StringBuilder json) throws Exception {
+        Listing listing = currentProgram.getListing();
+        List<Bookmark> allBookmarks = new ArrayList<>();
+        Iterator<Bookmark> bookmarkIt =
+            currentProgram.getBookmarkManager().getBookmarksIterator();
+        while (bookmarkIt.hasNext()) {
+            allBookmarks.add(bookmarkIt.next());
+        }
+        Rows functions = new Rows(ROW_MAX, SECTION_BYTES_LARGE);
+        FunctionIterator it = currentProgram.getFunctionManager().getFunctions(true);
+        while (it.hasNext()) {
+            if (monitor.isCancelled()) {
+                break;
+            }
+            Function fn = it.next();
+            if (!functions.open()) {
+                functions.skip();
+                continue;
+            }
+            long entry = fn.getEntryPoint().getOffset();
+            java.security.MessageDigest digest =
+                java.security.MessageDigest.getInstance("SHA-256");
+            long insnCount = 0;
+            InstructionIterator insns = listing.getInstructions(fn.getBody(), true);
+            while (insns.hasNext()) {
+                Instruction insn = insns.next();
+                try {
+                    digest.update(insn.getBytes());
+                } catch (Exception e) {
+                    // An unreadable instruction contributes nothing;
+                    // the count still records that it existed.
+                }
+                insnCount++;
+            }
+            String hash = "";
+            if (insnCount > 0) {
+                StringBuilder hex = new StringBuilder();
+                for (byte b : digest.digest()) {
+                    hex.append(String.format("%02x", b));
+                }
+                hash = hex.toString();
+            }
+            Rows comments = new Rows(256, SECTION_BYTES_SMALL);
+            AddressIterator commentAddrs =
+                listing.getCommentAddressIterator(fn.getBody(), true);
+            while (commentAddrs.hasNext()) {
+                Address at = commentAddrs.next();
+                for (CommentType type : COMMENT_TYPES) {
+                    String text = listing.getComment(type, at);
+                    if (text == null) {
+                        continue;
+                    }
+                    if (type == CommentType.PLATE && at.equals(fn.getEntryPoint())) {
+                        continue;
+                    }
+                    if (!comments.open()) {
+                        comments.skip();
+                        continue;
+                    }
+                    boolean cut = text.length() > COMMENT_CHARS_MAX;
+                    comments.add(new Obj()
+                        .num("offset", at.getOffset() - entry)
+                        .str("text", cut ? text.substring(0, COMMENT_CHARS_MAX) : text)
+                        .bool("text_truncated", cut)
+                        .str("type", commentTypeName(type))
+                        .done());
+                }
+            }
+            Rows bookmarks = new Rows(256, SECTION_BYTES_TINY);
+            for (Bookmark bookmark : allBookmarks) {
+                if (!fn.getBody().contains(bookmark.getAddress())) {
+                    continue;
+                }
+                if (!bookmarks.open()) {
+                    bookmarks.skip();
+                    continue;
+                }
+                String bookmarkText = bookmark.getComment() == null
+                    ? "" : bookmark.getComment();
+                bookmarks.add(new Obj()
+                    .str("category", bookmark.getCategory())
+                    .str("comment", bookmarkText.length() > COMMENT_CHARS_MAX
+                        ? bookmarkText.substring(0, COMMENT_CHARS_MAX) : bookmarkText)
+                    .num("offset", bookmark.getAddress().getOffset() - entry)
+                    .str("type", bookmark.getTypeString())
+                    .done());
+            }
+            Rows parameters = new Rows(ROW_MAX, SECTION_BYTES_TINY);
+            for (Parameter parameter : fn.getParameters()) {
+                parameters.add(variableJson(parameter, parameter.getOrdinal()));
+            }
+            Rows locals = new Rows(ROW_MAX, SECTION_BYTES_SMALL);
+            for (Variable local : fn.getLocalVariables()) {
+                locals.add(variableJson(local, -1));
+            }
+            List<String> tagNames = new ArrayList<>();
+            for (FunctionTag tag : fn.getTags()) {
+                tagNames.add(tag.getName());
+            }
+            java.util.Collections.sort(tagNames);
+            String plate = fn.getComment() == null ? "" : fn.getComment();
+            boolean plateCut = plate.length() > COMMENT_CHARS_MAX;
+            String repeatable = fn.getRepeatableComment() == null
+                ? "" : fn.getRepeatableComment();
+            boolean repeatableCut = repeatable.length() > COMMENT_CHARS_MAX;
+            functions.add(new Obj()
+                .str("address", addr(fn.getEntryPoint()))
+                .num("body_size", fn.getBody().getNumAddresses())
+                .raw("bookmarks", bookmarks.json())
+                .str("classification", classification(fn))
+                .raw("comments", comments.json())
+                .str("hash", hash)
+                .raw("locals", locals.json())
+                .str("name", fn.getName())
+                .str("name_source", String.valueOf(fn.getSymbol().getSource()))
+                .raw("parameters", parameters.json())
+                .str("plate_comment", plateCut
+                    ? plate.substring(0, COMMENT_CHARS_MAX) : plate)
+                .bool("plate_comment_truncated", plateCut)
+                .str("repeatable_comment", repeatableCut
+                    ? repeatable.substring(0, COMMENT_CHARS_MAX) : repeatable)
+                .bool("repeatable_comment_truncated", repeatableCut)
+                .str("return_type", fn.getReturnType() == null
+                    ? "" : fn.getReturnType().getName())
+                .str("signature", fn.getSignature().toString())
+                .str("signature_source", String.valueOf(fn.getSignatureSource()))
+                .raw("tags", quotedArray(tagNames))
+                .done());
+        }
+        json.append(",\"transfer\":{\"functions\":").append(functions.json()).append('}');
     }
 
     // ---- addresses: per-address facts for up to ADDRESS_QUERY_MAX.

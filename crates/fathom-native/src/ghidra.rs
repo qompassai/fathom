@@ -21,6 +21,7 @@ pub mod mutate;
 pub mod program;
 pub(crate) mod query;
 pub mod search;
+pub mod transfer;
 pub mod types;
 pub mod write;
 pub mod xrefs;

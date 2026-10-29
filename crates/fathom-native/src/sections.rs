@@ -638,6 +638,58 @@ pub struct StringReference {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TransferBookmark {
+    pub category: String,
+    pub comment: String,
+    pub offset: u64,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferComment {
+    pub offset: u64,
+    pub text: String,
+    pub text_truncated: bool,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferFacts {
+    pub functions: Bounded<TransferFunction>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TransferFunction {
+    pub address: String,
+    pub body_size: u64,
+    pub bookmarks: Bounded<TransferBookmark>,
+    pub classification: String,
+    pub comments: Bounded<TransferComment>,
+    pub hash: String,
+    pub locals: Bounded<VarName>,
+    pub name: String,
+    pub name_source: String,
+    pub parameters: Bounded<VarName>,
+    pub plate_comment: String,
+    pub plate_comment_truncated: bool,
+    pub repeatable_comment: String,
+    pub repeatable_comment_truncated: bool,
+    pub return_type: String,
+    pub signature: String,
+    pub signature_source: String,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VarName {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct Types {
     pub builtins: Bounded<BuiltinType>,
     pub categories: Bounded<Category>,

@@ -21,7 +21,7 @@ use fathom_core::process::{ProcessSpec, run};
 
 use crate::sections::{
     AddressFacts, ByteSearch, CallGraph, DecompileRow, Detail, Disassembly, InstructionSearch,
-    ProgramFacts, Types,
+    ProgramFacts, TransferFacts, Types,
 };
 
 /// Locate Ghidra's `analyzeHeadless`: explicit config first,
@@ -410,6 +410,8 @@ pub struct Export {
     pub program: ProgramInfo,
     #[serde(default)]
     pub program_facts: Option<ProgramFacts>,
+    #[serde(default)]
+    pub transfer: Option<TransferFacts>,
     #[serde(default)]
     pub query_error: Option<String>,
     #[serde(default)]
