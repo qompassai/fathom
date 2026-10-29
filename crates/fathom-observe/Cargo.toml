@@ -7,7 +7,7 @@ rust-version.workspace = true
 description = "fathom observe set: process capture, HAR reading, EVM selectors, browser, firmware, and Android providers"
 
 [dependencies]
-fathom-core = { path = "../fathom-core" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
 flate2.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -8,7 +8,7 @@ description = "fathom MCP transports: rmcp (modern era only) over stdio behind a
 
 [dependencies]
 axum.workspace = true
-fathom-core = { path = "../fathom-core" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
 # Fleet pin (D-113): one rmcp version across every estate server;
 # modern era (2026-07-28) only. The era guard in `guard.rs` owns
 # the stdio front door; rmcp owns the envelope behind it.

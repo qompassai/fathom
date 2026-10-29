@@ -8,6 +8,6 @@ description = "fathom .NET provider: manual ECMA-335 metadata parsing over gobli
 
 [dependencies]
 goblin = "0.10"
-fathom-core = { path = "../fathom-core" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

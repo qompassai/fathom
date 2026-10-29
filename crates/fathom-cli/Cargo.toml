@@ -14,13 +14,13 @@ path = "src/main.rs"
 axum.workspace = true
 clap.workspace = true
 fathom-a2a = { path = "../fathom-a2a" }
-fathom-art = { path = "../fathom-art" }
-fathom-core = { path = "../fathom-core" }
-fathom-js = { path = "../fathom-js" }
-fathom-managed = { path = "../fathom-managed" }
-fathom-mcp-server = { path = "../fathom-mcp" }
-fathom-native = { path = "../fathom-native" }
-fathom-observe = { path = "../fathom-observe" }
-fathom-video = { path = "../fathom-video" }
+fathom-art = { version = "1.0.0", path = "../fathom-art" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
+fathom-js = { version = "1.0.0", path = "../fathom-js" }
+fathom-managed = { version = "1.0.0", path = "../fathom-managed" }
+fathom-mcp-server = { version = "1.0.0", path = "../fathom-mcp" }
+fathom-native = { version = "1.0.0", path = "../fathom-native" }
+fathom-observe = { version = "1.0.0", path = "../fathom-observe" }
+fathom-video = { version = "1.0.0", path = "../fathom-video" }
 serde_json.workspace = true
 tokio.workspace = true

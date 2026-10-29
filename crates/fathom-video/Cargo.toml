@@ -8,7 +8,7 @@ description = "fathom video set: YouTube ingest, local-ASR transcripts, frame sa
 
 [dependencies]
 base64.workspace = true
-fathom-core = { path = "../fathom-core" }
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
