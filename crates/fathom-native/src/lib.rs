@@ -277,6 +277,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "census_cubism_model",
+            ToolClass::Observe,
+            "cubism",
+            "Live2D Cubism model census over a loose model directory: model3.json \
+             file references and EyeBlink/LipSync groups (empty Id lists reported \
+             honestly), cdi3 parameters/groups/parts, and the moc3 binary's own \
+             census (version, canvas, parts, drawables, parameters)",
+            target_schema(),
+        ),
+        Arc::new(cubism::census_cubism_model),
+    );
+    registry.register(
+        descriptor(
             "clear_function_comments",
             ToolClass::Execute,
             "ghidra",
@@ -569,6 +582,23 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::detection::extract_iocs_with_context),
+    );
+    registry.register(
+        descriptor(
+            "extract_unity_bundle",
+            ToolClass::Observe,
+            "unity",
+            "Extract payloads from a UnityFS bundle (formats 6-8) or standalone \
+             SerializedFile into an output directory under a target root, with a \
+             manifest: TextAsset script bytes verbatim, Texture2D metadata plus \
+             raw payload (pixels not decoded), MonoBehaviour raw payloads plus \
+             carved moc3 spans; LZMA blocks-info bundles are reported, not decoded",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(unity::extract_unity_bundle),
     );
     registry.register(
         descriptor(
