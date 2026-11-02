@@ -40,6 +40,118 @@ pub fn validate_target(config: &Config, target: &Path) -> Result<PathBuf, Fathom
     .with_remediation("Add the containing directory to target_roots in the config."))
 }
 
+/// Resolve a caller-named output directory and prove it lives
+/// under a configured target root, creating it if needed.
+///
+/// Unlike `validate_target`, the directory may not exist yet.
+/// The longest existing ancestor is canonicalized (resolving
+/// symlinks) and must sit under a root; `..` components are
+/// refused outright, so the not-yet-existing tail can only add
+/// plain names under that ancestor. After creation the full
+/// path is canonicalized and checked again, closing any
+/// symlink planted in the tail between the two checks.
+pub fn validate_output_dir(config: &Config, dir: &Path) -> Result<PathBuf, FathomError> {
+    let denied = |message: String| {
+        FathomError::new(ErrorCode::AccessDenied, message)
+            .with_target(dir.display().to_string())
+            .with_remediation("Name an output directory under one of the configured target_roots.")
+    };
+    if config.target_roots.is_empty() {
+        return Err(denied(
+            "no target roots are configured; the operator must declare target_roots before any output directory is writable"
+                .to_string(),
+        ));
+    }
+    if dir
+        .components()
+        .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(denied(format!(
+            "output directory {} contains a '..' component",
+            dir.display()
+        )));
+    }
+    let absolute = std::path::absolute(dir).map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("output directory {} cannot be resolved: {e}", dir.display()),
+        )
+        .with_target(dir.display().to_string())
+    })?;
+    // The longest existing ancestor plus the plain file names
+    // below it. A tail component that already exists (even as
+    // a symlink) stops the walk, so it is canonicalized as
+    // part of the ancestor and judged by the prefix check.
+    let mut ancestor = absolute.clone();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    while !ancestor.exists() {
+        match ancestor.file_name() {
+            Some(name) => {
+                tail.push(name.to_os_string());
+                let popped = ancestor.pop();
+                assert!(popped, "a path with a file name pops");
+            }
+            None => {
+                return Err(denied(format!(
+                    "output directory {} has no existing ancestor",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    let canonical_ancestor = ancestor.canonicalize().map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!(
+                "output directory ancestor {} cannot be resolved: {e}",
+                ancestor.display()
+            ),
+        )
+        .with_target(dir.display().to_string())
+    })?;
+    if !config
+        .target_roots
+        .iter()
+        .any(|root| canonical_ancestor.starts_with(root))
+    {
+        return Err(denied(format!(
+            "output directory {} is outside every configured target root",
+            dir.display()
+        )));
+    }
+    let mut resolved = canonical_ancestor;
+    for name in tail.iter().rev() {
+        resolved.push(name);
+    }
+    std::fs::create_dir_all(&resolved).map_err(|e| {
+        FathomError::new(
+            ErrorCode::ExecutionFailure,
+            format!("cannot create output directory {}: {e}", resolved.display()),
+        )
+    })?;
+    let canonical = resolved.canonicalize().map_err(|e| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!(
+                "output directory {} cannot be resolved after creation: {e}",
+                resolved.display()
+            ),
+        )
+        .with_target(dir.display().to_string())
+    })?;
+    if !config
+        .target_roots
+        .iter()
+        .any(|root| canonical.starts_with(root))
+    {
+        return Err(denied(format!(
+            "output directory {} resolves outside every configured target root",
+            dir.display()
+        )));
+    }
+    Ok(canonical)
+}
+
 /// Create (if needed) and return a named subdirectory of the
 /// state dir. Providers write only under the state dir.
 pub fn state_subdir(config: &Config, name: &str) -> Result<PathBuf, FathomError> {
@@ -109,6 +221,53 @@ mod tests {
         let resolved = validate_target(&config, &file).unwrap();
         assert_eq!(resolved, file.canonicalize().unwrap());
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_output_dir_inside_root_is_created() {
+        let root = scratch("outok");
+        let config = config_with_root(&root);
+        let wanted = root.join("extract").join("run-1");
+        let resolved = validate_output_dir(&config, &wanted).unwrap();
+        assert_eq!(resolved, wanted.canonicalize().unwrap());
+        assert!(resolved.is_dir());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_output_dir_dotdot_is_rejected() {
+        let root = scratch("outdotdot");
+        let config = config_with_root(&root);
+        let escape = root.join("sub").join("..").join("..").join("elsewhere");
+        let err = validate_output_dir(&config, &escape).unwrap_err();
+        assert_eq!(err.code, ErrorCode::AccessDenied);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_output_dir_outside_root_is_rejected() {
+        let root = scratch("outroot");
+        let outside = scratch("outoutside");
+        let config = config_with_root(&root);
+        let err = validate_output_dir(&config, &outside.join("extract")).unwrap_err();
+        assert_eq!(err.code, ErrorCode::AccessDenied);
+        assert!(!outside.join("extract").exists(), "nothing was created");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn adversarial_output_dir_symlink_ancestor_escape_is_rejected() {
+        let root = scratch("outlinkroot");
+        let outside = scratch("outlinkoutside");
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+        let config = config_with_root(&root);
+        let err = validate_output_dir(&config, &root.join("link").join("extract")).unwrap_err();
+        assert_eq!(err.code, ErrorCode::AccessDenied);
+        assert!(!outside.join("extract").exists(), "nothing was created");
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     #[cfg(unix)]
