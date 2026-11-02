@@ -50,7 +50,12 @@ const PART_IDS_ENTRY: usize = 3;
 
 /// The estate's standard Cubism parameter vocabulary
 /// (the comparison set the hand census uses).
-const STANDARD_PARAMETERS: [&str; 40] = [
+/// The standard Cubism parameter vocabulary (the hand
+/// census's STANDARD_40) plus the three channel names the
+/// estate's ground-truth census counts as standard on the
+/// antalion models — ParamBrowL_UpDown, ParamBrowR_UpDown,
+/// ParamMouthOpen — which occur in no other corpus model.
+const STANDARD_PARAMETERS: [&str; 43] = [
     "ParamAngleX",
     "ParamAngleY",
     "ParamAngleZ",
@@ -75,7 +80,10 @@ const STANDARD_PARAMETERS: [&str; 40] = [
     "ParamBrowRAngle",
     "ParamBrowLForm",
     "ParamBrowRForm",
+    "ParamBrowL_UpDown",
+    "ParamBrowR_UpDown",
     "ParamMouthForm",
+    "ParamMouthOpen",
     "ParamMouthOpenY",
     "ParamCheek",
     "ParamBodyAngleX",
