@@ -20,6 +20,7 @@ members = [
     "crates/fathom-native",
     "crates/fathom-observe",
     "crates/fathom-video",
+    "crates/fathom-web",
 ]
 resolver = "2"
 
