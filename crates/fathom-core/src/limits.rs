@@ -33,6 +33,19 @@ pub const BYTE_PATTERN_BYTES_MAX: usize = 64;
 /// Patterns in one byte search (mirrors BYTE_PATTERN_MAX).
 pub const BYTE_PATTERN_COUNT_MAX: usize = 32;
 
+/// Drawables censused in one Cubism moc3 (game-extract lane).
+pub const CUBISM_DRAWABLES_MAX: usize = 100_000;
+
+/// Bytes per ID slot in a moc3 string table (format fact: IDs
+/// are NUL-padded 64-byte records).
+pub const CUBISM_ID_SLOT_BYTES: usize = 64;
+
+/// Parameters censused in one Cubism moc3 (game-extract lane).
+pub const CUBISM_PARAMETERS_MAX: usize = 100_000;
+
+/// Parts censused in one Cubism moc3 (game-extract lane).
+pub const CUBISM_PARTS_MAX: usize = 100_000;
+
 /// Hops walked from one function in a call-graph neighborhood or
 /// an API call-chain search.
 pub const CALL_GRAPH_DEPTH_MAX: usize = 8;
@@ -163,6 +176,15 @@ pub const TARGET_BYTES_MAX: u64 = 536_870_912;
 /// Decompressed bytes of one UnityFS blocks-info blob
 /// (readers SPEC §2.3).
 pub const UNITY_BLOCKS_INFO_BYTES_MAX: usize = 16_777_216;
+
+/// Total payload bytes one `extract_unity_bundle` call writes
+/// (game-extract lane); entries past the bound are recorded as
+/// skipped, never silently dropped.
+pub const UNITY_EXTRACT_BYTES_MAX: u64 = 4_294_967_296;
+
+/// Moc3 payloads carved from one MonoBehaviour's raw bytes
+/// (game-extract lane).
+pub const UNITY_EXTRACT_CARVES_MAX: usize = 256;
 
 /// Directory nodes in one UnityFS bundle (readers SPEC §2.3).
 pub const UNITY_NODES_MAX: usize = 100_000;
