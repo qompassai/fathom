@@ -15,5 +15,6 @@ pub fn build_registry() -> Registry {
     fathom_native::register(&mut registry);
     fathom_observe::register(&mut registry);
     fathom_video::register(&mut registry);
+    fathom_web::register(&mut registry);
     registry
 }

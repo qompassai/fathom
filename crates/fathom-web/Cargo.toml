@@ -1,0 +1,12 @@
+[package]
+name = "fathom-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "fathom web set: public Notion page-tree extraction — the full block tree behind a public page, as deterministic markdown plus a block census"
+
+[dependencies]
+fathom-core = { version = "1.0.0", path = "../fathom-core" }
+serde.workspace = true
+serde_json.workspace = true

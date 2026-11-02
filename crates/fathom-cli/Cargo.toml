@@ -22,5 +22,6 @@ fathom-mcp-server = { version = "1.0.0", path = "../fathom-mcp" }
 fathom-native = { version = "1.0.0", path = "../fathom-native" }
 fathom-observe = { version = "1.0.0", path = "../fathom-observe" }
 fathom-video = { version = "1.0.0", path = "../fathom-video" }
+fathom-web = { version = "1.0.0", path = "../fathom-web" }
 serde_json.workspace = true
 tokio.workspace = true

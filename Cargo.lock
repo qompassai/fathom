@@ -556,6 +556,7 @@ dependencies = [
  "fathom-native",
  "fathom-observe",
  "fathom-video",
+ "fathom-web",
  "serde_json",
  "tokio",
 ]
@@ -638,6 +639,15 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+]
+
+[[package]]
+name = "fathom-web"
+version = "1.0.0"
+dependencies = [
+ "fathom-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
