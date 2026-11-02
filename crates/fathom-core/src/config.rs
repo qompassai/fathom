@@ -46,6 +46,42 @@ pub struct ProvidersFile {
     /// SPEC §4.3/§4.4: rendition and ASR are configuration,
     /// never per-call arguments).
     pub video: Option<VideoProviderFile>,
+    /// The public-web lane's provider block (Notion page-tree
+    /// extraction: the fetcher program is configuration, never
+    /// a per-call argument).
+    pub web: Option<WebProviderFile>,
+}
+
+/// The `[providers.web]` block, on-disk form.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebProviderFile {
+    /// Fetcher program (default `curl`).
+    pub fetcher_program: Option<PathBuf>,
+}
+
+/// Validated web-lane configuration.
+#[derive(Clone, Debug)]
+pub struct WebConfig {
+    pub fetcher_program: PathBuf,
+}
+
+impl Default for WebConfig {
+    fn default() -> Self {
+        WebConfig {
+            fetcher_program: PathBuf::from("curl"),
+        }
+    }
+}
+
+impl WebConfig {
+    fn from_file_form(form: WebProviderFile) -> WebConfig {
+        WebConfig {
+            fetcher_program: form
+                .fetcher_program
+                .unwrap_or_else(|| PathBuf::from("curl")),
+        }
+    }
 }
 
 /// The `[providers.video]` block, on-disk form.
@@ -160,6 +196,7 @@ pub struct Config {
     pub state_dir: PathBuf,
     pub target_roots: Vec<PathBuf>,
     pub video: VideoConfig,
+    pub web: WebConfig,
 }
 
 impl Config {
@@ -214,9 +251,19 @@ impl Config {
         }
         target_roots.sort();
         target_roots.dedup();
-        let video = match form.providers.and_then(|providers| providers.video) {
-            Some(video_form) => VideoConfig::from_file_form(video_form)?,
-            None => VideoConfig::default(),
+        let (video, web) = match form.providers {
+            Some(providers) => {
+                let video = match providers.video {
+                    Some(video_form) => VideoConfig::from_file_form(video_form)?,
+                    None => VideoConfig::default(),
+                };
+                let web = match providers.web {
+                    Some(web_form) => WebConfig::from_file_form(web_form),
+                    None => WebConfig::default(),
+                };
+                (video, web)
+            }
+            None => (VideoConfig::default(), WebConfig::default()),
         };
         Ok(Config {
             allow_programs,
@@ -227,6 +274,7 @@ impl Config {
             state_dir,
             target_roots,
             video,
+            web,
         })
     }
 
@@ -266,6 +314,7 @@ impl Config {
             state_dir: default_state_dir(),
             target_roots: Vec::new(),
             video: VideoConfig::default(),
+            web: WebConfig::default(),
         }
     }
 

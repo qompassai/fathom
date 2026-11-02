@@ -895,6 +895,7 @@ mod tests {
                 state_dir: self.state_dir.clone(),
                 target_roots: vec![self.root.canonicalize().unwrap()],
                 video: fathom_core::config::VideoConfig::default(),
+                web: fathom_core::config::WebConfig::default(),
             }
         }
 
