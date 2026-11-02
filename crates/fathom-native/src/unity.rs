@@ -1243,7 +1243,7 @@ fn read_serialized_bytes<'a>(
 
 /// Parse a TextAsset payload's name and script bytes
 /// (m_Name then m_Script, both length-prefixed).
-fn parse_text_asset<'a>(payload: &'a [u8], little: bool) -> Option<(String, &'a [u8])> {
+fn parse_text_asset(payload: &[u8], little: bool) -> Option<(String, &[u8])> {
     let mut position = 0usize;
     let name = read_serialized_bytes(payload, &mut position, little)?;
     let script = read_serialized_bytes(payload, &mut position, little)?;

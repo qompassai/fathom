@@ -537,7 +537,7 @@ fn parse_moc3(bytes: &[u8]) -> Result<Moc3, FathomError> {
             bytes[5]
         )));
     }
-    let count_info_at = read_u32le(bytes, 64)? as usize;
+    let count_info_at = read_u32le(bytes, 64 + COUNT_INFO_ENTRY * 4)? as usize;
     if count_info_at < 68 || !(count_info_at - 64).is_multiple_of(4) {
         return Err(mismatch(format!(
             "moc3 count-info offset {count_info_at} does not follow the offset table"
