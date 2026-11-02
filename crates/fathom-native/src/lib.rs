@@ -10,6 +10,7 @@
 
 pub mod artifact;
 pub mod beam;
+pub mod cubism;
 pub mod engine;
 pub mod ghidra;
 pub mod godot;
