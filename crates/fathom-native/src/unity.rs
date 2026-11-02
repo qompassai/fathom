@@ -27,9 +27,12 @@ use std::path::Path;
 
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
-use fathom_core::evidence::{Confidence, Evidence, Finding, subject_for_file_with_bound};
+use fathom_core::evidence::{
+    Confidence, Evidence, Finding, sha256_hex, subject_for_file_with_bound,
+};
 use fathom_core::limits::{
-    ARCHIVE_TARGET_BYTES_MAX, UNITY_BLOCKS_INFO_BYTES_MAX, UNITY_NODES_MAX, UNITY_OBJECTS_MAX,
+    ARCHIVE_TARGET_BYTES_MAX, TEXTURE_DIMENSION_MAX, UNITY_BLOCKS_INFO_BYTES_MAX,
+    UNITY_EXTRACT_BYTES_MAX, UNITY_EXTRACT_CARVES_MAX, UNITY_NODES_MAX, UNITY_OBJECTS_MAX,
     UNITY_TYPES_MAX,
 };
 use fathom_core::paths;
@@ -39,6 +42,11 @@ use fathom_core::registry::{Registry, require_str};
 /// Bundle formats implemented (SPEC §7.8).
 const BUNDLE_FORMAT_MAX: u32 = 8;
 const BUNDLE_FORMAT_MIN: u32 = 6;
+/// Unity class IDs whose payloads extraction writes
+/// (game-extract lane): MonoBehaviour, TextAsset, Texture2D.
+const CLASS_MONO_BEHAVIOUR: i64 = 114;
+const CLASS_TEXT_ASSET: i64 = 49;
+const CLASS_TEXTURE_2D: i64 = 28;
 /// Header strings (signature, versions) live well inside
 /// this prefix.
 const HEADER_PREFIX_BYTES: u64 = 65_536;
@@ -362,13 +370,29 @@ impl<'a> SfCursor<'a> {
     }
 }
 
+/// One object's payload location inside its SerializedFile
+/// (game-extract lane): the byte ranges the census counts
+/// but does not surface, retained so extraction can slice
+/// payloads without re-walking the metadata.
+struct SfPayload {
+    byte_size: u32,
+    byte_start: u64,
+    class_id: i64,
+    path_id: i64,
+    script_type_index: i16,
+    type_index: i32,
+}
+
 /// The SerializedFile metadata census (SPEC §7.5).
 struct SfSummary {
+    data_offset: u64,
     endianness: &'static str,
+    little: bool,
     object_count: u32,
     objects: Vec<Value>,
     objects_by_class: Value,
     objects_truncated: bool,
+    payloads: Vec<SfPayload>,
     type_count: u32,
     types: Vec<Value>,
     unity_version: Option<String>,
@@ -418,7 +442,7 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
         return Err(truncated("serialized file is shorter than its header"));
     }
     let be_u32 = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
-    let (version, _file_size, _data_offset) = {
+    let (version, _file_size, data_offset) = {
         // Version sits at offset 8 for versions < 22; the
         // version-22 header moves file size before it. The
         // version at offset 8 for a v22 file reads as the low
@@ -515,6 +539,7 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
     }
     let object_count = cursor.read_u32()?;
     let mut objects = Vec::new();
+    let mut payloads = Vec::new();
     let mut objects_by_class_map: std::collections::BTreeMap<String, u64> = Default::default();
     let mut objects_truncated = false;
     for index in 0..object_count {
@@ -545,10 +570,20 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
         *objects_by_class_map
             .entry(census_class.to_string())
             .or_insert(0) += 1;
-        if version >= 16 {
-            cursor.read_i16()?; // script type index (in type row already)
-        }
+        let script_type_index = if version >= 16 {
+            cursor.read_i16()?
+        } else {
+            -1
+        };
         if (index as usize) < UNITY_OBJECTS_MAX {
+            payloads.push(SfPayload {
+                byte_size,
+                byte_start,
+                class_id: census_class,
+                path_id,
+                script_type_index,
+                type_index,
+            });
             objects.push(json!({
                 "byte_size": byte_size,
                 "byte_start": byte_start,
@@ -562,11 +597,14 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
     }
     let objects_by_class = json!(objects_by_class_map);
     Ok(SfSummary {
+        data_offset,
         endianness: if little { "little" } else { "big" },
+        little,
         object_count,
         objects,
         objects_by_class,
         objects_truncated,
+        payloads,
         type_count,
         types,
         unity_version,
@@ -950,6 +988,749 @@ pub fn inspect_unity_bundle(
     evidence.coverage.examined = examined;
     evidence.coverage.total = total;
     evidence.coverage.exhaustive = examined == total && evidence.unknowns.is_empty();
+    Ok(evidence.to_value())
+}
+
+// ---------------------------------------------------------------------
+// Extraction (game-extract lane)
+// ---------------------------------------------------------------------
+
+/// Accumulates one extraction run: manifest entries, notes
+/// for anything not extracted, and the byte budget spent.
+struct ExtractState {
+    entries: Vec<Value>,
+    notes: Vec<String>,
+    written_bytes: u64,
+}
+
+/// Find embedded moc3 payloads inside a MonoBehaviour
+/// payload (the hand census's carve rule): scan for the
+/// MOC3 magic; take the length from the int32 at 4/8/12
+/// bytes before the magic when it lands plausibly,
+/// otherwise carve to the end of the payload.
+fn carve_moc3_spans(payload: &[u8], little: bool) -> Vec<(usize, usize, String)> {
+    let mut spans = Vec::new();
+    let mut search_from = 0usize;
+    while spans.len() < UNITY_EXTRACT_CARVES_MAX {
+        let Some(relative) = payload[search_from..]
+            .windows(4)
+            .position(|window| window == b"MOC3")
+        else {
+            break;
+        };
+        let offset = search_from + relative;
+        let mut carved = None;
+        for back in [4usize, 8, 12] {
+            if offset < back {
+                continue;
+            }
+            let raw = &payload[offset - back..offset];
+            let length = if little {
+                i32::from_le_bytes(raw.try_into().unwrap())
+            } else {
+                i32::from_be_bytes(raw.try_into().unwrap())
+            };
+            if length <= 1024 {
+                continue;
+            }
+            let Ok(length) = usize::try_from(length) else {
+                continue;
+            };
+            let Some(end) = offset.checked_add(length) else {
+                continue;
+            };
+            if end > payload.len() || payload.get(end..end + 4) == Some(b"MOC3".as_slice()) {
+                continue;
+            }
+            carved = Some((offset, length, format!("int32_at_minus_{back}")));
+            break;
+        }
+        let span = carved.unwrap_or_else(|| {
+            (
+                offset,
+                payload.len() - offset,
+                "to_end_of_payload".to_string(),
+            )
+        });
+        search_from = offset + 4;
+        spans.push(span);
+    }
+    spans
+}
+
+/// How a written payload's content was recognised, when it
+/// was: moc3 magic, a model3 JSON signature, or a Cubism
+/// file-name suffix (the hand census's detection rule).
+fn cubism_detection(name: &str, script: &[u8]) -> Option<&'static str> {
+    if script.starts_with(b"MOC3") {
+        return Some("moc3_magic");
+    }
+    if script
+        .windows(b"\"FileReferences\"".len())
+        .any(|window| window == b"\"FileReferences\"")
+    {
+        return Some("model3_signature");
+    }
+    let lower = name.to_ascii_lowercase();
+    if [".moc3", ".model3.json", ".cdi3.json", ".exp3.json"]
+        .iter()
+        .any(|suffix| lower.ends_with(suffix))
+    {
+        return Some("cubism_name");
+    }
+    None
+}
+
+/// Extract every payload of the classes the lane writes
+/// from one SerializedFile's bytes into
+/// `out_dir/<node name>/`, appending manifest entries.
+fn extract_serialized(
+    node_key: &str,
+    bytes: &[u8],
+    out_dir: &Path,
+    state: &mut ExtractState,
+) -> Result<(), FathomError> {
+    let summary = parse_serialized_file(bytes)?;
+    let subdir_name = safe_file_name(node_key, "serialized");
+    let subdir = out_dir.join(&subdir_name);
+    std::fs::create_dir_all(&subdir).map_err(|error| io_error("create", &subdir, error))?;
+    for payload in &summary.payloads {
+        if !matches!(
+            payload.class_id,
+            CLASS_MONO_BEHAVIOUR | CLASS_TEXT_ASSET | CLASS_TEXTURE_2D
+        ) {
+            continue;
+        }
+        extract_object(
+            &summary,
+            bytes,
+            payload,
+            node_key,
+            &subdir_name,
+            &subdir,
+            state,
+        )?;
+    }
+    Ok(())
+}
+
+/// Extract one object's payload; every outcome — written,
+/// out of bounds, over budget — lands as a manifest entry.
+fn extract_object(
+    summary: &SfSummary,
+    bytes: &[u8],
+    payload: &SfPayload,
+    node_key: &str,
+    subdir_name: &str,
+    subdir: &Path,
+    state: &mut ExtractState,
+) -> Result<(), FathomError> {
+    let class_name = match payload.class_id {
+        CLASS_MONO_BEHAVIOUR => "MonoBehaviour",
+        CLASS_TEXT_ASSET => "TextAsset",
+        _ => "Texture2D",
+    };
+    let mut entry = json!({
+        "bytes": payload.byte_size,
+        "class": class_name,
+        "class_id": payload.class_id,
+        "kind": "object",
+        "node": node_key,
+        "path_id": payload.path_id,
+        "status": "not_extracted",
+    });
+    let Some(start) = summary
+        .data_offset
+        .checked_add(payload.byte_start)
+        .and_then(|value| usize::try_from(value).ok())
+    else {
+        entry["reason"] = json!("payload offset overflows the file size type");
+        state.entries.push(entry);
+        return Ok(());
+    };
+    let Some(slice) = start
+        .checked_add(payload.byte_size as usize)
+        .and_then(|end| bytes.get(start..end))
+    else {
+        entry["reason"] = json!("payload range lies outside the serialized file");
+        state.entries.push(entry);
+        return Ok(());
+    };
+    match payload.class_id {
+        CLASS_TEXT_ASSET => {
+            extract_text_asset(summary, payload, slice, subdir_name, subdir, state, entry)?
+        }
+        CLASS_TEXTURE_2D => {
+            extract_texture(summary, payload, slice, subdir_name, subdir, state, entry)?
+        }
+        _ => extract_mono_behaviour(summary, payload, slice, subdir_name, subdir, state, entry)?,
+    }
+    Ok(())
+}
+
+/// Map an I/O failure on an extraction path to the typed
+/// error the tools return (the house pattern for file
+/// access failures, mirroring the census readers).
+fn io_error(action: &str, path: &Path, error: std::io::Error) -> FathomError {
+    FathomError::new(
+        ErrorCode::TargetUnavailable,
+        format!("cannot {action} {}: {error}", path.display()),
+    )
+}
+
+/// Write one payload through the byte budget; Ok(None)
+/// means the budget refused it (the caller records the
+/// skip), Err is an I/O failure.
+fn write_budgeted(
+    state: &mut ExtractState,
+    dir: &Path,
+    file_name: &str,
+    bytes: &[u8],
+) -> Result<Option<String>, FathomError> {
+    if state.written_bytes.saturating_add(bytes.len() as u64) > UNITY_EXTRACT_BYTES_MAX {
+        return Ok(None);
+    }
+    let digest = write_extracted(dir, file_name, bytes)?;
+    state.written_bytes += bytes.len() as u64;
+    Ok(Some(digest))
+}
+
+/// Write one extracted payload atomically (temp file, then
+/// rename) and return its sha256.
+fn write_extracted(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<String, FathomError> {
+    let temp = dir.join(format!(".tmp-{file_name}"));
+    let destination = dir.join(file_name);
+    std::fs::write(&temp, bytes).map_err(|error| io_error("write", &temp, error))?;
+    std::fs::rename(&temp, &destination)
+        .map_err(|error| io_error("rename", &destination, error))?;
+    Ok(sha256_hex(bytes))
+}
+
+/// Read one i32 at `*position` in the file's endianness.
+fn read_i32_at(bytes: &[u8], position: &mut usize, little: bool) -> Option<i32> {
+    let raw = bytes.get(*position..position.checked_add(4)?)?;
+    *position += 4;
+    Some(if little {
+        i32::from_le_bytes(raw.try_into().ok()?)
+    } else {
+        i32::from_be_bytes(raw.try_into().ok()?)
+    })
+}
+
+/// Read one Unity serialized length-prefixed byte field
+/// (i32 length, content, 4-byte alignment of the whole
+/// field) at `*position`; None on any overrun or negative
+/// length.
+fn read_serialized_bytes<'a>(
+    bytes: &'a [u8],
+    position: &mut usize,
+    little: bool,
+) -> Option<&'a [u8]> {
+    let field_start = *position;
+    let length = read_i32_at(bytes, position, little)?;
+    if length < 0 {
+        return None;
+    }
+    let length = usize::try_from(length).ok()?;
+    let content_start = field_start.checked_add(4)?;
+    let content_end = content_start.checked_add(length)?;
+    let content = bytes.get(content_start..content_end)?;
+    let field_len = 4usize.checked_add(length)?;
+    let aligned_len = field_len.checked_add(3)? / 4 * 4;
+    *position = field_start.checked_add(aligned_len)?.min(bytes.len());
+    Some(content)
+}
+
+/// Parse a TextAsset payload's name and script bytes
+/// (m_Name then m_Script, both length-prefixed).
+fn parse_text_asset<'a>(payload: &'a [u8], little: bool) -> Option<(String, &'a [u8])> {
+    let mut position = 0usize;
+    let name = read_serialized_bytes(payload, &mut position, little)?;
+    let script = read_serialized_bytes(payload, &mut position, little)?;
+    Some((String::from_utf8_lossy(name).into_owned(), script))
+}
+
+/// Parse a Texture2D payload's leading metadata (name,
+/// width, height, complete image size, format, mip
+/// count). Pixel decoding is out of scope: image-data
+/// placement needs the type tree the readers SPEC keeps
+/// unexpanded, so the raw payload is what extraction
+/// retains and the manifest says so.
+fn parse_texture_prefix(payload: &[u8], little: bool) -> Option<Value> {
+    let mut position = 0usize;
+    let name = read_serialized_bytes(payload, &mut position, little)?;
+    let width = read_i32_at(payload, &mut position, little)?;
+    let height = read_i32_at(payload, &mut position, little)?;
+    let complete_image_size = read_i32_at(payload, &mut position, little)?;
+    let format = read_i32_at(payload, &mut position, little)?;
+    let mip_count = read_i32_at(payload, &mut position, little)?;
+    if !(1..=TEXTURE_DIMENSION_MAX).contains(&width)
+        || !(1..=TEXTURE_DIMENSION_MAX).contains(&height)
+        || complete_image_size < 0
+        || mip_count < 0
+    {
+        return None;
+    }
+    Some(json!({
+        "complete_image_size": complete_image_size,
+        "format": format,
+        "format_name": texture_format_name(format),
+        "height": height,
+        "mip_count": mip_count,
+        "name": String::from_utf8_lossy(name).into_owned(),
+        "width": width,
+    }))
+}
+
+/// Names for the TextureFormat codes the estate's corpus
+/// uses; anything else reports as `unknown_<code>` — the
+/// numeric code is always recorded alongside.
+fn texture_format_name(code: i32) -> String {
+    let name = match code {
+        1 => "Alpha8",
+        2 => "ARGB4444",
+        3 => "RGB24",
+        4 => "RGBA32",
+        5 => "ARGB32",
+        7 => "RGB565",
+        10 => "DXT1",
+        12 => "DXT5",
+        25 => "BC7",
+        other => return format!("unknown_{other}"),
+    };
+    name.to_string()
+}
+
+/// Reduce a Unity object or node name to one safe
+/// file-name component: ASCII alphanumerics and `.`/`-`/`_`
+/// survive, everything else becomes `_`; capped at 128
+/// chars; an empty or dot-only result falls back.
+fn safe_file_name(name: &str, fallback: &str) -> String {
+    let out: String = name
+        .chars()
+        .take(128)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() || out.chars().all(|c| c == '.') {
+        return fallback.to_string();
+    }
+    out
+}
+
+/// Extract a TextAsset: the script bytes verbatim under
+/// the asset's own name; an unparseable header falls back
+/// to the raw object payload, recorded as such.
+#[allow(clippy::too_many_arguments)]
+fn extract_text_asset(
+    summary: &SfSummary,
+    payload: &SfPayload,
+    slice: &[u8],
+    subdir_name: &str,
+    subdir: &Path,
+    state: &mut ExtractState,
+    mut entry: Value,
+) -> Result<(), FathomError> {
+    let (file_name, data, form, detected) = match parse_text_asset(slice, summary.little) {
+        Some((name, script)) => {
+            let detected = cubism_detection(&name, script);
+            (
+                safe_file_name(&name, &format!("textasset_{}", payload.path_id)),
+                script,
+                "text_asset_script",
+                detected,
+            )
+        }
+        None => (
+            format!("textasset_{}.bin", payload.path_id),
+            slice,
+            "raw_object",
+            None,
+        ),
+    };
+    entry["detected"] = json!(detected);
+    entry["payload_form"] = json!(form);
+    match write_budgeted(state, subdir, &file_name, data)? {
+        Some(digest) => {
+            entry["bytes_written"] = json!(data.len());
+            entry["file"] = json!(format!("{subdir_name}/{file_name}"));
+            entry["sha256"] = json!(digest);
+            entry["status"] = json!("extracted");
+        }
+        None => {
+            entry["status"] = json!("skipped_budget");
+        }
+    }
+    state.entries.push(entry);
+    Ok(())
+}
+
+/// Extract a Texture2D: leading metadata in the manifest,
+/// raw payload bytes on disk; pixel data is not decoded
+/// (see `parse_texture_prefix`).
+#[allow(clippy::too_many_arguments)]
+fn extract_texture(
+    summary: &SfSummary,
+    payload: &SfPayload,
+    slice: &[u8],
+    subdir_name: &str,
+    subdir: &Path,
+    state: &mut ExtractState,
+    mut entry: Value,
+) -> Result<(), FathomError> {
+    let metadata = parse_texture_prefix(slice, summary.little);
+    let file_name = match metadata.as_ref().and_then(|meta| meta["name"].as_str()) {
+        Some(name) => format!(
+            "{}.tex2d.bin",
+            safe_file_name(name, &format!("texture2d_{}", payload.path_id))
+        ),
+        None => format!("texture2d_{}.bin", payload.path_id),
+    };
+    entry["payload_form"] = json!("raw_object");
+    entry["pixel_data"] =
+        json!("not_decoded — image-data placement requires the type tree; raw payload retained");
+    entry["texture"] = metadata.unwrap_or(Value::Null);
+    match write_budgeted(state, subdir, &file_name, slice)? {
+        Some(digest) => {
+            entry["bytes_written"] = json!(slice.len());
+            entry["file"] = json!(format!("{subdir_name}/{file_name}"));
+            entry["sha256"] = json!(digest);
+            entry["status"] = json!("extracted");
+        }
+        None => {
+            entry["status"] = json!("skipped_budget");
+        }
+    }
+    state.entries.push(entry);
+    Ok(())
+}
+
+/// Extract a MonoBehaviour: raw payload bytes (typetree
+/// expansion is out of scope), plus any embedded moc3
+/// spans carved out as their own entries.
+#[allow(clippy::too_many_arguments)]
+fn extract_mono_behaviour(
+    summary: &SfSummary,
+    payload: &SfPayload,
+    slice: &[u8],
+    subdir_name: &str,
+    subdir: &Path,
+    state: &mut ExtractState,
+    mut entry: Value,
+) -> Result<(), FathomError> {
+    let file_name = format!("monobehaviour_{}.bin", payload.path_id);
+    entry["payload_form"] = json!("raw_object");
+    entry["script_type_index"] = json!(payload.script_type_index);
+    entry["type_hash"] = summary
+        .types
+        .get(usize::try_from(payload.type_index).unwrap_or(usize::MAX))
+        .and_then(|row| row.get("type_hash").cloned())
+        .unwrap_or(Value::Null);
+    match write_budgeted(state, subdir, &file_name, slice)? {
+        Some(digest) => {
+            entry["bytes_written"] = json!(slice.len());
+            entry["file"] = json!(format!("{subdir_name}/{file_name}"));
+            entry["sha256"] = json!(digest);
+            entry["status"] = json!("extracted");
+        }
+        None => {
+            entry["status"] = json!("skipped_budget");
+        }
+    }
+    let node_value = entry["node"].clone();
+    state.entries.push(entry);
+    for (index, (offset, length, source)) in carve_moc3_spans(slice, summary.little)
+        .into_iter()
+        .enumerate()
+    {
+        let carved = &slice[offset..offset + length];
+        let carve_name = format!("monobehaviour_{}_carve{index}.moc3", payload.path_id);
+        let mut carve_entry = json!({
+            "bytes": length,
+            "kind": "moc3_carve",
+            "length_source": source,
+            "moc3_version": carved.get(4).copied(),
+            "node": node_value,
+            "offset_in_payload": offset,
+            "source_path_id": payload.path_id,
+            "status": "not_extracted",
+        });
+        match write_budgeted(state, subdir, &carve_name, carved)? {
+            Some(digest) => {
+                carve_entry["bytes_written"] = json!(carved.len());
+                carve_entry["file"] = json!(format!("{subdir_name}/{carve_name}"));
+                carve_entry["sha256"] = json!(digest);
+                carve_entry["status"] = json!("extracted");
+            }
+            None => {
+                carve_entry["status"] = json!("skipped_budget");
+            }
+        }
+        state.entries.push(carve_entry);
+    }
+    Ok(())
+}
+
+/// Decode a bundle's blocks-info block (the parallel of
+/// the inline path in `inspect_unity_bundle`, kept separate
+/// so the census path is untouched). Ok(None) means the
+/// blocks-info block itself is LZMA-compressed — the §7.10
+/// gap the census path also declines.
+fn load_blocks_info(
+    reader: &mut RegionReader,
+    header: &BundleHeader,
+    file_len: u64,
+) -> Result<Option<(BlocksInfo, u64)>, FathomError> {
+    let compression = header.flags & 0x3F;
+    if compression == 1 {
+        return Ok(None);
+    }
+    if !matches!(compression, 0 | 2 | 3) {
+        return Err(unsupported(format!(
+            "blocks-info compression code {compression} is not implemented (supported: 0 none, 2 LZ4, 3 LZ4HC; 1 LZMA is reported, not decoded)"
+        )));
+    }
+    if header.uncompressed_blocks_info_size as usize > UNITY_BLOCKS_INFO_BYTES_MAX {
+        return Err(resource(format!(
+            "blocks info declares {} uncompressed bytes, over UNITY_BLOCKS_INFO_BYTES_MAX ({UNITY_BLOCKS_INFO_BYTES_MAX})",
+            header.uncompressed_blocks_info_size
+        )));
+    }
+    let blocks_info_offset = if header.blocks_info_at_end {
+        if file_len < u64::from(header.compressed_blocks_info_size) {
+            return Err(truncated(
+                "file is smaller than the blocks-info region at its end",
+            ));
+        }
+        file_len - u64::from(header.compressed_blocks_info_size)
+    } else {
+        header.data_start
+    };
+    let stored_info = reader.read_range(
+        blocks_info_offset,
+        u64::from(header.compressed_blocks_info_size),
+    )?;
+    let info_bytes = match compression {
+        0 => stored_info,
+        _ => {
+            lz4_flex::block::decompress(&stored_info, header.uncompressed_blocks_info_size as usize)
+                .map_err(|error| mismatch(format!("blocks info does not decompress: {error}")))?
+        }
+    };
+    if info_bytes.len() != header.uncompressed_blocks_info_size as usize {
+        return Err(mismatch(
+            "blocks info decompressed size disagrees with the header declaration",
+        ));
+    }
+    let info = parse_blocks_info(&info_bytes)?;
+    let blocks_file_start = if header.blocks_info_at_end {
+        header.data_start
+    } else {
+        blocks_info_offset + u64::from(header.compressed_blocks_info_size)
+    };
+    Ok(Some((info, blocks_file_start)))
+}
+
+/// Extract from a UnityFS bundle target: serialized nodes
+/// go through `extract_serialized`, plain nodes are written
+/// verbatim, directory nodes are recorded as skipped.
+fn extract_from_bundle(
+    reader: &mut RegionReader,
+    header: &BundleHeader,
+    file_len: u64,
+    out_dir: &Path,
+    state: &mut ExtractState,
+    facts: &mut Value,
+) -> Result<(), FathomError> {
+    facts["container"] = json!("unityfs");
+    facts["format_version"] = json!(header.format_version);
+    facts["unity_version"] = json!(header.unity_version);
+    let Some((info, blocks_file_start)) = load_blocks_info(reader, header, file_len)? else {
+        facts["blocks_info_decoded"] = json!(false);
+        state.notes.push(
+            "blocks info block is LZMA-compressed (readers SPEC §7.10): not decoded by this reader, no extraction performed"
+                .to_string(),
+        );
+        return Ok(());
+    };
+    facts["blocks_info_decoded"] = json!(true);
+    facts["block_count"] = json!(info.blocks.len());
+    facts["node_count"] = json!(info.nodes.len());
+    if info.nodes.len() > UNITY_NODES_MAX {
+        return Err(resource(format!(
+            "bundle declares {} nodes, over UNITY_NODES_MAX ({UNITY_NODES_MAX})",
+            info.nodes.len()
+        )));
+    }
+    for node in &info.nodes {
+        if node.flags & 1 != 0 {
+            continue; // directory node: no payload
+        }
+        let node_data = match node_bytes(reader, blocks_file_start, &info, node) {
+            Ok(data) => data,
+            Err(message) => {
+                state.entries.push(json!({
+                    "kind": "node",
+                    "node": node.path,
+                    "reason": message,
+                    "status": "not_extracted",
+                }));
+                continue;
+            }
+        };
+        if node.flags & 4 != 0 {
+            if let Err(error) = extract_serialized(&node.path, &node_data, out_dir, state) {
+                state
+                    .notes
+                    .push(format!("{}: {}", node.path, error.message));
+            }
+        } else {
+            let file_name = safe_file_name(&node.path, "node");
+            let mut entry = json!({
+                "bytes": node_data.len(),
+                "kind": "node_file",
+                "node": node.path,
+                "status": "not_extracted",
+            });
+            match write_budgeted(state, out_dir, &file_name, &node_data)? {
+                Some(digest) => {
+                    entry["bytes_written"] = json!(node_data.len());
+                    entry["file"] = json!(file_name);
+                    entry["sha256"] = json!(digest);
+                    entry["status"] = json!("extracted");
+                }
+                None => {
+                    entry["status"] = json!("skipped_budget");
+                }
+            }
+            state.entries.push(entry);
+        }
+    }
+    Ok(())
+}
+
+/// Extract payloads from a UnityFS bundle or a standalone
+/// SerializedFile into a caller-named output directory,
+/// with a manifest (game-extract lane). TextAsset script
+/// bytes verbatim, Texture2D metadata + raw payload
+/// (pixels not decoded), MonoBehaviour raw payload plus
+/// carved moc3 spans.
+#[allow(clippy::too_many_lines)]
+pub fn extract_unity_bundle(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let out_dir = paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
+    let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
+    let subject_sha256 = subject.sha256.clone();
+    let file_len = subject.size_bytes;
+    let file = File::open(&path).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot open target: {error}"),
+        )
+    })?;
+    let mut reader = RegionReader {
+        file,
+        len: file_len,
+    };
+    let prefix = reader.read_range(0, file_len.min(HEADER_PREFIX_BYTES))?;
+    let mut state = ExtractState {
+        entries: Vec::new(),
+        notes: Vec::new(),
+        written_bytes: 0,
+    };
+    let mut facts = json!({ "target": path.display().to_string() });
+    if prefix.starts_with(b"UnityFS\0") {
+        let header = parse_bundle_header(&prefix)?;
+        extract_from_bundle(
+            &mut reader,
+            &header,
+            file_len,
+            &out_dir,
+            &mut state,
+            &mut facts,
+        )?;
+    } else {
+        let bytes = reader.read_range(0, file_len)?;
+        facts["container"] = json!("serialized_file");
+        extract_serialized("standalone", &bytes, &out_dir, &mut state)?;
+    }
+    let extracted = state
+        .entries
+        .iter()
+        .filter(|entry| entry["status"] == "extracted")
+        .count();
+    let skipped_budget = state
+        .entries
+        .iter()
+        .filter(|entry| entry["status"] == "skipped_budget")
+        .count();
+    let carves = state
+        .entries
+        .iter()
+        .filter(|entry| entry["kind"] == "moc3_carve")
+        .count();
+    let totals = json!({
+        "bytes_written": state.written_bytes,
+        "carves": carves,
+        "entries": state.entries.len(),
+        "extracted": extracted,
+        "skipped_budget": skipped_budget,
+    });
+    let manifest = json!({
+        "container": facts["container"].clone(),
+        "entries": state.entries,
+        "notes": state.notes,
+        "target": path.display().to_string(),
+        "target_sha256": subject_sha256,
+        "tool": "extract_unity_bundle",
+        "totals": totals,
+    });
+    let manifest_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|error| mismatch(format!("extraction manifest does not serialise: {error}")))?;
+    write_extracted(&out_dir, "manifest.json", &manifest_bytes)?;
+    facts["entries"] = json!(state.entries.len());
+    facts["extracted"] = json!(extracted);
+    facts["manifest_path"] = json!(out_dir.join("manifest.json").display().to_string());
+    facts["output_dir"] = json!(out_dir.display().to_string());
+    facts["totals"] = totals;
+    let mut evidence = Evidence::new("extract_unity_bundle", "unity");
+    evidence.subject = Some(subject);
+    evidence.add_finding(Finding::new("unity_extract", Confidence::Observed, facts));
+    for note in &state.notes {
+        evidence.add_unknown("extraction", note.clone());
+    }
+    let exhaustive = state.notes.is_empty()
+        && state
+            .entries
+            .iter()
+            .all(|entry| entry["status"] == "extracted");
+    evidence.coverage.examined = state.entries.len() as u64;
+    evidence.coverage.total = state.entries.len() as u64;
+    evidence.coverage.exhaustive = exhaustive;
+    match proof::retain_export(config, &subject_sha256, "unity_extract", &manifest) {
+        Ok(digest) => {
+            evidence.add_finding(Finding::new(
+                "unity_extract_export",
+                Confidence::Observed,
+                json!({ "export_digest": digest }),
+            ));
+        }
+        Err(error) => {
+            evidence.add_unknown(
+                "retention",
+                format!("extraction manifest retention failed: {}", error.message),
+            );
+        }
+    }
     Ok(evidence.to_value())
 }
 
@@ -1587,5 +2368,211 @@ mod tests {
         assert_eq!(bundle_facts(&value)["bundle_size_discrepancy"], true);
         assert_eq!(bundle_facts(&value)["bundle_size_declared"], 10);
         fs::remove_dir_all(&root).ok();
+    }
+
+    /// SerializedFile (v21, little-endian) carrying three
+    /// payload objects: a TextAsset whose script is a fake
+    /// moc3, a Texture2D, and a MonoBehaviour embedding a
+    /// moc3 behind an int32 length prefix.
+    fn sf_with_payloads() -> Vec<u8> {
+        let mut script = b"MOC3\x05".to_vec();
+        script.extend(std::iter::repeat_n(0x11_u8, 100));
+        let mut text_asset = Vec::new();
+        text_asset.extend_from_slice(&9_i32.to_le_bytes());
+        text_asset.extend_from_slice(b"Hero.moc3");
+        text_asset.extend_from_slice(&[0, 0, 0]); // align 13 -> 16
+        text_asset.extend_from_slice(&(script.len() as i32).to_le_bytes());
+        text_asset.extend_from_slice(&script);
+        while text_asset.len() % 4 != 0 {
+            text_asset.push(0);
+        }
+        let mut texture = Vec::new();
+        texture.extend_from_slice(&7_i32.to_le_bytes());
+        texture.extend_from_slice(b"HeroTex");
+        texture.push(0); // align 11 -> 12
+        for value in [64_i32, 32, 8192, 4, 1] {
+            texture.extend_from_slice(&value.to_le_bytes());
+        }
+        texture.extend(std::iter::repeat_n(0x22_u8, 100));
+        let mut moc3 = b"MOC3\x05".to_vec();
+        moc3.extend(std::iter::repeat_n(0x33_u8, 1100));
+        let mut mono = Vec::new();
+        mono.extend_from_slice(&(moc3.len() as i32).to_le_bytes());
+        mono.extend_from_slice(&moc3);
+        let mut meta = Vec::new();
+        meta.extend_from_slice(b"2022.3.0f1\0");
+        meta.extend_from_slice(&0_u32.to_le_bytes()); // script compatibility
+        meta.push(0); // type tree disabled
+        meta.extend_from_slice(&3_u32.to_le_bytes()); // type count
+        for class_id in [49_i32, 28] {
+            meta.extend_from_slice(&class_id.to_le_bytes());
+            meta.push(0); // is_stripped
+            meta.extend_from_slice(&(-1_i16).to_le_bytes());
+        }
+        meta.extend_from_slice(&114_i32.to_le_bytes());
+        meta.push(0);
+        meta.extend_from_slice(&(-1_i16).to_le_bytes());
+        meta.extend(std::iter::repeat_n(0xAB_u8, 16)); // script id
+        meta.extend(std::iter::repeat_n(0xCD_u8, 16)); // type hash
+        meta.extend_from_slice(&3_u32.to_le_bytes()); // object count
+        let sizes = [text_asset.len(), texture.len(), mono.len()];
+        let classes = [49_u16, 28, 114];
+        let mut start = 0_u32;
+        for index in 0..3 {
+            meta.extend_from_slice(&(index as i64 + 1).to_le_bytes()); // path_id
+            meta.extend_from_slice(&start.to_le_bytes());
+            meta.extend_from_slice(&(sizes[index] as u32).to_le_bytes());
+            meta.extend_from_slice(&(index as i32).to_le_bytes()); // type_index
+            meta.extend_from_slice(&classes[index].to_le_bytes());
+            meta.extend_from_slice(&(-1_i16).to_le_bytes());
+            start += sizes[index] as u32;
+        }
+        let data_offset = 20 + meta.len();
+        let total = data_offset + sizes.iter().sum::<usize>();
+        let mut out = Vec::new();
+        out.extend_from_slice(&0_u32.to_be_bytes()); // metadata size
+        out.extend_from_slice(&(total as u32).to_be_bytes());
+        out.extend_from_slice(&21_u32.to_be_bytes());
+        out.extend_from_slice(&(data_offset as u32).to_be_bytes());
+        out.push(0); // little-endian
+        out.extend_from_slice(&[0, 0, 0]); // reserved
+        out.extend_from_slice(&meta);
+        out.extend_from_slice(&text_asset);
+        out.extend_from_slice(&texture);
+        out.extend_from_slice(&mono);
+        out
+    }
+
+    fn run_extract(
+        test_name: &str,
+        bytes: &[u8],
+    ) -> (PathBuf, PathBuf, Result<Value, FathomError>) {
+        let root = std::env::temp_dir().join(format!(
+            "fathom-native-test-{}-{test_name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("game.assets");
+        fs::write(&target, bytes).unwrap();
+        let config = Config::from_toml_str(&format!(
+            "state_dir = {:?}\ntarget_roots = [{:?}]\n",
+            root.join("state"),
+            root,
+        ))
+        .unwrap();
+        let out_dir = root.join("out");
+        let args = json!({
+            "output_dir": out_dir.display().to_string(),
+            "target": target.display().to_string(),
+        });
+        let result = extract_unity_bundle(&Registry::new(), &config, &args);
+        (root, out_dir, result)
+    }
+
+    #[test]
+    fn extract_writes_text_asset_texture_and_carved_moc3() {
+        let (root, out_dir, result) = run_extract("extract-payloads", &sf_with_payloads());
+        let value = result.unwrap();
+        let facts = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "unity_extract")
+            .map(|finding| finding["facts"].clone())
+            .unwrap();
+        assert_eq!(facts["totals"]["extracted"], 4);
+        assert_eq!(facts["totals"]["carves"], 1);
+        let manifest: Value =
+            serde_json::from_slice(&fs::read(out_dir.join("manifest.json")).unwrap()).unwrap();
+        let entries = manifest["entries"].as_array().unwrap();
+        let text = entries
+            .iter()
+            .find(|entry| entry["class"] == "TextAsset")
+            .unwrap();
+        assert_eq!(text["detected"], "moc3_magic");
+        assert_eq!(text["file"], "standalone/Hero.moc3");
+        let written = fs::read(out_dir.join("standalone/Hero.moc3")).unwrap();
+        assert!(written.starts_with(b"MOC3\x05"));
+        assert_eq!(written.len(), 105);
+        let texture = entries
+            .iter()
+            .find(|entry| entry["class"] == "Texture2D")
+            .unwrap();
+        assert_eq!(texture["texture"]["width"], 64);
+        assert_eq!(texture["texture"]["format_name"], "RGBA32");
+        let mono = entries
+            .iter()
+            .find(|entry| entry["class"] == "MonoBehaviour")
+            .unwrap();
+        assert_eq!(mono["type_hash"], "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+        let carve = entries
+            .iter()
+            .find(|entry| entry["kind"] == "moc3_carve")
+            .unwrap();
+        assert_eq!(carve["length_source"], "int32_at_minus_4");
+        assert_eq!(carve["moc3_version"], 5);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn extract_refuses_output_dir_outside_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "fathom-native-test-{}-extract-outside",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("game.assets");
+        fs::write(&target, sf_with_payloads()).unwrap();
+        let config = Config::from_toml_str(&format!(
+            "state_dir = {:?}\ntarget_roots = [{:?}]\n",
+            root.join("state"),
+            root,
+        ))
+        .unwrap();
+        let outside =
+            std::env::temp_dir().join(format!("fathom-extract-outside-{}", std::process::id()));
+        let args = json!({
+            "output_dir": outside.display().to_string(),
+            "target": target.display().to_string(),
+        });
+        let result = extract_unity_bundle(&Registry::new(), &config, &args);
+        assert!(result.is_err());
+        assert!(!outside.exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn extract_truncated_serialized_file_fails_closed() {
+        let bytes = sf_with_payloads();
+        let (root, out_dir, result) = run_extract("extract-truncated", &bytes[..40]);
+        assert!(result.is_err());
+        assert!(!out_dir.join("manifest.json").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn carve_falls_back_when_length_prefix_lies() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&9_999_999_i32.to_le_bytes());
+        payload.extend_from_slice(b"MOC3\x05");
+        payload.extend(std::iter::repeat_n(0x44_u8, 50));
+        let spans = carve_moc3_spans(&payload, true);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].0, 4);
+        assert_eq!(spans[0].2, "to_end_of_payload");
+    }
+
+    #[test]
+    fn serialized_bytes_reject_negative_length() {
+        let bytes = (-3_i32).to_le_bytes();
+        let mut position = 0;
+        assert!(read_serialized_bytes(&bytes, &mut position, true).is_none());
+    }
+
+    #[test]
+    fn safe_file_name_flattens_paths() {
+        assert_eq!(safe_file_name("a/b\\c:d", "x"), "a_b_c_d");
+        assert_eq!(safe_file_name("..", "fallback"), "fallback");
+        assert_eq!(safe_file_name("Hero.moc3", "x"), "Hero.moc3");
     }
 }
