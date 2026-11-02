@@ -255,3 +255,32 @@ pub const VIDEO_TRANSCRIPT_BYTES_MAX: usize = 4_194_304;
 
 /// Spans retained per video ingest (YouTube-RE §11).
 pub const VIDEO_TRANSCRIPT_SPANS_MAX: usize = 20_000;
+
+/// Blocks retained in one Notion page tree (web lane).
+pub const WEB_BLOCKS_MAX: usize = 20_000;
+
+/// Chunks followed for one page before the page is recorded
+/// as chunk-truncated (web lane).
+pub const WEB_CHUNKS_PER_PAGE_MAX: usize = 16;
+
+/// Bytes of one `loadCachedPageChunkV2` document (web lane).
+pub const WEB_CHUNK_BYTES_MAX: usize = 16_777_216;
+
+/// Child-page depth walked from the root page (web lane).
+pub const WEB_DEPTH_MAX: usize = 8;
+
+/// Wall clock for one web fetch child — page HTML or one
+/// chunk (web lane).
+pub const WEB_FETCH_TIMEOUT_SECS: u64 = 30;
+
+/// Markdown bytes returned inline by one web extraction;
+/// longer renderings are truncated at a char boundary and
+/// the digest still covers the complete rendering (web lane).
+pub const WEB_MARKDOWN_BYTES_MAX: usize = 524_288;
+
+/// Pages fetched for one Notion tree (web lane).
+pub const WEB_PAGES_MAX: usize = 64;
+
+/// Bytes of one public page's HTML bootstrap document
+/// (web lane).
+pub const WEB_PAGE_HTML_BYTES_MAX: usize = 4_194_304;

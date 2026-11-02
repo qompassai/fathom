@@ -727,6 +727,7 @@ mod tests {
             state_dir,
             target_roots: vec![root.canonicalize().unwrap()],
             video: fathom_core::config::VideoConfig::default(),
+            web: fathom_core::config::WebConfig::default(),
         };
         SeededTarget {
             config,

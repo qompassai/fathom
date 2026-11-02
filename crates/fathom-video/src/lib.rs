@@ -281,6 +281,7 @@ mod tests {
                 state_dir: state_dir.clone(),
                 target_roots: vec![target_root],
                 video: VideoConfig::default(),
+                web: fathom_core::config::WebConfig::default(),
             };
             let mut config = config;
             config.video.fetcher_program = stub;
