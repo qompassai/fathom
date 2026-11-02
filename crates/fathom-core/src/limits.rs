@@ -173,6 +173,10 @@ pub const SYMBOL_COUNT_MAX: usize = 20_000;
 /// Bytes in one analysis target (hashed and read by providers).
 pub const TARGET_BYTES_MAX: u64 = 536_870_912;
 
+/// Largest Texture2D width or height the extractor
+/// accepts from a payload prefix (game-extract lane).
+pub const TEXTURE_DIMENSION_MAX: i32 = 65_536;
+
 /// Decompressed bytes of one UnityFS blocks-info blob
 /// (readers SPEC §2.3).
 pub const UNITY_BLOCKS_INFO_BYTES_MAX: usize = 16_777_216;
