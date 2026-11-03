@@ -351,11 +351,7 @@ fn fixed_size(fields: &[FieldLayout]) -> i64 {
 /// its scope assembly), or a TypeSpec row.
 enum Resolved {
     Def(usize, usize),
-    Ref {
-        name: String,
-        namespace: String,
-        scope: Option<String>,
-    },
+    Ref { name: String, namespace: String },
     TypeSpec(usize, usize),
 }
 
@@ -417,7 +413,6 @@ impl TypeIndex {
                 Some(Resolved::Ref {
                     name: type_ref.name.clone(),
                     namespace: type_ref.namespace.clone(),
-                    scope: type_ref.scope_assembly.clone(),
                 })
             }
             TABLE_TYPE_SPEC => Some(Resolved::TypeSpec(asm_index, token.row)),
@@ -427,13 +422,7 @@ impl TypeIndex {
 
     fn extends_of(&self, asm_index: usize, td_index: usize) -> Option<Resolved> {
         let (table, row) = self.assemblies[asm_index].type_defs[td_index].extends?;
-        self.resolve_token(
-            asm_index,
-            TypeToken {
-                row,
-                table,
-            },
-        )
+        self.resolve_token(asm_index, TypeToken { row, table })
     }
 
     /// Resolved bases in leaf-to-root order; the walk stops
@@ -462,13 +451,7 @@ impl TypeIndex {
         }
     }
 
-    fn reaches_type(
-        &self,
-        asm_index: usize,
-        td_index: usize,
-        namespace: &str,
-        name: &str,
-    ) -> bool {
+    fn reaches_type(&self, asm_index: usize, td_index: usize, namespace: &str, name: &str) -> bool {
         let type_def = &self.assemblies[asm_index].type_defs[td_index];
         if type_def.namespace == namespace && type_def.name == name {
             return true;
@@ -559,11 +542,26 @@ static GUI_STYLE_FIELDS: &[(&str, NativeSpec)] = &[
     ("m_Normal", NativeSpec::Type("UnityEngine", "GUIStyleState")),
     ("m_Hover", NativeSpec::Type("UnityEngine", "GUIStyleState")),
     ("m_Active", NativeSpec::Type("UnityEngine", "GUIStyleState")),
-    ("m_Focused", NativeSpec::Type("UnityEngine", "GUIStyleState")),
-    ("m_OnNormal", NativeSpec::Type("UnityEngine", "GUIStyleState")),
-    ("m_OnHover", NativeSpec::Type("UnityEngine", "GUIStyleState")),
-    ("m_OnActive", NativeSpec::Type("UnityEngine", "GUIStyleState")),
-    ("m_OnFocused", NativeSpec::Type("UnityEngine", "GUIStyleState")),
+    (
+        "m_Focused",
+        NativeSpec::Type("UnityEngine", "GUIStyleState"),
+    ),
+    (
+        "m_OnNormal",
+        NativeSpec::Type("UnityEngine", "GUIStyleState"),
+    ),
+    (
+        "m_OnHover",
+        NativeSpec::Type("UnityEngine", "GUIStyleState"),
+    ),
+    (
+        "m_OnActive",
+        NativeSpec::Type("UnityEngine", "GUIStyleState"),
+    ),
+    (
+        "m_OnFocused",
+        NativeSpec::Type("UnityEngine", "GUIStyleState"),
+    ),
     ("m_Border", NativeSpec::Type("UnityEngine", "RectOffset")),
     ("m_Padding", NativeSpec::Type("UnityEngine", "RectOffset")),
     ("m_Margin", NativeSpec::Type("UnityEngine", "RectOffset")),
@@ -618,12 +616,15 @@ fn opaque_layout(namespace: &str, name: &str) -> Option<i64> {
     }
 }
 
+/// One class's serialized fields plus its skipped fields
+/// with reasons.
+type ClassFields = (Rc<Vec<FieldLayout>>, Rc<Vec<(String, String)>>);
+
 /// Builds per-class serialized layouts over a `TypeIndex`.
 /// Field lists are cached per definition (failures too, so
 /// a refused class refuses identically everywhere).
 struct LayoutBuilder<'a> {
-    class_cache:
-        RefCell<HashMap<(usize, usize), XResult<(Rc<Vec<FieldLayout>>, Rc<Vec<(String, String)>>)>>>,
+    class_cache: RefCell<HashMap<(usize, usize), XResult<ClassFields>>>,
     depth: Cell<i32>,
     index: &'a TypeIndex,
 }
@@ -773,7 +774,10 @@ impl<'a> LayoutBuilder<'a> {
                     let outer: Subst = cur_subst.clone().unwrap_or_default();
                     let mut new_subst: Subst = BTreeMap::new();
                     for (i, arg) in args.iter().enumerate() {
-                        new_subst.insert((false, u32::try_from(i).unwrap_or(u32::MAX)), substitute(arg, &outer));
+                        new_subst.insert(
+                            (false, u32::try_from(i).unwrap_or(u32::MAX)),
+                            substitute(arg, &outer),
+                        );
                     }
                     cur_asm = next_asm;
                     cur_td = next_td;
@@ -794,18 +798,19 @@ impl<'a> LayoutBuilder<'a> {
                 Ok(node)
             }
             NativeSpec::Prim(prim) => {
-                let (type_name, size, align) =
-                    prim_info(prim).ok_or_else(|| refusal("native layout spec unhandled", *prim))?;
+                let (type_name, size, align) = prim_info(prim)
+                    .ok_or_else(|| refusal("native layout spec unhandled", *prim))?;
                 Ok(Node::prim(type_name, prim, size, align))
             }
             NativeSpec::Raw(size) => Ok(Node::new("raw".to_string(), NodeKind::Raw, *size, 4)),
             NativeSpec::Str => Ok(Node::new("string".to_string(), NodeKind::String, -1, 4)),
             NativeSpec::Type(namespace, name) => {
                 let display = type_display(namespace, name);
-                let Some(&(hit_asm, hit_td)) = self.index.global_types.get(&(
-                    (*namespace).to_string(),
-                    (*name).to_string(),
-                )) else {
+                let Some(&(hit_asm, hit_td)) = self
+                    .index
+                    .global_types
+                    .get(&((*namespace).to_string(), (*name).to_string()))
+                else {
                     return Err(refusal("native layout type unresolved", display));
                 };
                 self.node_for_class(hit_asm, hit_td, field_name, None, None)?
@@ -841,12 +846,10 @@ impl<'a> LayoutBuilder<'a> {
         asm_index: usize,
         td_index: usize,
         subst: Option<&Subst>,
-    ) -> XResult<(Rc<Vec<FieldLayout>>, Rc<Vec<(String, String)>>)> {
+    ) -> XResult<ClassFields> {
         let cacheable = subst.is_none();
-        if cacheable {
-            if let Some(cached) = self.class_cache.borrow().get(&(asm_index, td_index)) {
-                return cached.clone();
-            }
+        if cacheable && let Some(cached) = self.class_cache.borrow().get(&(asm_index, td_index)) {
+            return cached.clone();
         }
         self.depth.set(self.depth.get() + 1);
         if self.depth.get() > TYPE_DEPTH_MAX {
@@ -868,7 +871,7 @@ impl<'a> LayoutBuilder<'a> {
         asm_index: usize,
         td_index: usize,
         subst: Option<&Subst>,
-    ) -> XResult<(Rc<Vec<FieldLayout>>, Rc<Vec<(String, String)>>)> {
+    ) -> XResult<ClassFields> {
         if let Some(native) = self.native_fields(asm_index, td_index)? {
             return Ok((Rc::new(native), Rc::new(Vec::new())));
         }
@@ -879,7 +882,9 @@ impl<'a> LayoutBuilder<'a> {
             self.chain_with_subst(asm_index, td_index, subst)?
         {
             let level_def = &self.assembly(level_asm).type_defs[level_td];
-            if level_def.namespace == "UnityEngine" && HEADER_TYPES.contains(&level_def.name.as_str()) {
+            if level_def.namespace == "UnityEngine"
+                && HEADER_TYPES.contains(&level_def.name.as_str())
+            {
                 continue;
             }
             let in_struct = self.index.is_struct(level_asm, level_td);
@@ -940,7 +945,10 @@ impl<'a> LayoutBuilder<'a> {
                     ));
                     continue;
                 };
-                if !in_struct && node.kind == NodeKind::Prim && matches!(node.prim, Some("u1" | "i1")) {
+                if !in_struct
+                    && node.kind == NodeKind::Prim
+                    && matches!(node.prim, Some("u1" | "i1"))
+                {
                     // Corpus rule (TMP_FontAsset.italicStyle /
                     // tabSize, two fonts agreeing): a byte
                     // field of a reference type occupies a
@@ -958,19 +966,21 @@ impl<'a> LayoutBuilder<'a> {
                 leaf_stat = Some((level_own, fields.len() - level_start, level_ptr));
             }
         }
-        if let Some((own, serialized, has_ptr)) = leaf_stat {
-            if own > 0 && serialized == 0 && has_ptr {
-                // Native-backed type: the managed declaration
-                // carries only the m_Ptr handle and
-                // NotSerialized mirrors; the stream layout is
-                // the engine's own and has not been
-                // reconstructed. Refuse by name, do not guess.
-                let leaf = &self.assembly(asm_index).type_defs[td_index];
-                return Err(refusal(
-                    "native-serialized type without managed layout",
-                    type_display(&leaf.namespace, &leaf.name),
-                ));
-            }
+        if let Some((own, serialized, has_ptr)) = leaf_stat
+            && own > 0
+            && serialized == 0
+            && has_ptr
+        {
+            // Native-backed type: the managed declaration
+            // carries only the m_Ptr handle and
+            // NotSerialized mirrors; the stream layout is
+            // the engine's own and has not been
+            // reconstructed. Refuse by name, do not guess.
+            let leaf = &self.assembly(asm_index).type_defs[td_index];
+            return Err(refusal(
+                "native-serialized type without managed layout",
+                type_display(&leaf.namespace, &leaf.name),
+            ));
         }
         Ok((Rc::new(fields), Rc::new(skipped)))
     }
@@ -990,16 +1000,12 @@ impl<'a> LayoutBuilder<'a> {
                         self.node_for_class(def_asm, def_td, field_name, None, None)
                     }
                     Some(Resolved::Ref {
-                        name,
-                        namespace,
-                        ..
+                        name, namespace, ..
                     }) => Err(refusal(
                         "unresolved type reference",
                         format!("{} ({field_name})", type_display(&namespace, &name)),
                     )),
-                    Some(Resolved::TypeSpec(..)) => {
-                        Err(refusal("typespec type token", field_name))
-                    }
+                    Some(Resolved::TypeSpec(..)) => Err(refusal("typespec type token", field_name)),
                 }
             }
             SigKind::GenericInst { .. } => self.node_for_genericinst(asm_index, sig, field_name),
@@ -1047,9 +1053,7 @@ impl<'a> LayoutBuilder<'a> {
         match self.index.resolve_token(base.assembly, token) {
             None => Err(refusal("unresolved generic base", field_name)),
             Some(Resolved::Ref {
-                name,
-                namespace,
-                ..
+                name, namespace, ..
             }) => {
                 if name == "List`1" && namespace == "System.Collections.Generic" {
                     self.list_node(asm_index, args, field_name)
@@ -1073,7 +1077,8 @@ impl<'a> LayoutBuilder<'a> {
                 }
                 if matches!(
                     full.as_str(),
-                    "System.Collections.Generic.Dictionary`2" | "System.Collections.Generic.HashSet`1"
+                    "System.Collections.Generic.Dictionary`2"
+                        | "System.Collections.Generic.HashSet`1"
                 ) {
                     return Ok(None);
                 }
@@ -1128,7 +1133,9 @@ impl<'a> LayoutBuilder<'a> {
                         }
                         Ok(single())
                     }
-                    Some(Resolved::Ref { name, namespace, .. }) => {
+                    Some(Resolved::Ref {
+                        name, namespace, ..
+                    }) => {
                         if name == "List`1" && namespace == "System.Collections.Generic" {
                             return Ok(refarray());
                         }
@@ -1261,10 +1268,7 @@ impl<'a> LayoutBuilder<'a> {
         for (offset, name, node) in raw {
             let start = i64::from(offset);
             let end = start + node.size.get();
-            if covered
-                .iter()
-                .any(|(s, e)| start < *e && *s < end)
-            {
+            if covered.iter().any(|(s, e)| start < *e && *s < end) {
                 continue;
             }
             covered.push((start, end));
@@ -1338,10 +1342,10 @@ impl<'a> LayoutBuilder<'a> {
                         format!("{}: {}", field.name, error.message),
                     )
                 })?;
-                if let SigKind::Prim(name) = sig.kind {
-                    if prim_info(name).is_some() {
-                        return Ok(name);
-                    }
+                if let SigKind::Prim(name) = sig.kind
+                    && prim_info(name).is_some()
+                {
+                    return Ok(name);
                 }
                 return Ok("i4");
             }
@@ -1370,11 +1374,8 @@ impl<'a> Cursor<'a> {
     }
 
     fn align(&mut self, align: i64) {
-        self.pos = usize::try_from(align_up(
-            i64::try_from(self.pos).unwrap_or(i64::MAX),
-            align,
-        ))
-        .unwrap_or(self.pos);
+        self.pos = usize::try_from(align_up(i64::try_from(self.pos).unwrap_or(i64::MAX), align))
+            .unwrap_or(self.pos);
     }
 
     fn read_bytes(&mut self, count: usize) -> XResult<&'a [u8]> {
@@ -1973,13 +1974,12 @@ fn find_typedef(
     {
         return Some(*hit);
     }
-    if let Some((_outer, inner)) = class_name.split_once('/') {
-        if let Some(hit) = index
+    if let Some((_outer, inner)) = class_name.split_once('/')
+        && let Some(hit) = index
             .global_types
             .get(&(namespace.to_string(), inner.to_string()))
-        {
-            return Some(*hit);
-        }
+    {
+        return Some(*hit);
     }
     None
 }
@@ -2003,7 +2003,11 @@ struct ClassEntry {
     node: Option<Node>,
 }
 
-fn build_class_entry(index: &TypeIndex, builder: &LayoutBuilder, identity: &ScriptIdentity) -> ClassEntry {
+fn build_class_entry(
+    index: &TypeIndex,
+    builder: &LayoutBuilder,
+    identity: &ScriptIdentity,
+) -> ClassEntry {
     let mut info = Map::new();
     info.insert("assembly".to_string(), json!(identity.assembly));
     info.insert("class".to_string(), json!(identity.class));
@@ -2092,13 +2096,13 @@ fn build_class_entry(index: &TypeIndex, builder: &LayoutBuilder, identity: &Scri
 fn load_managed_schemas(target: &Path) -> (Vec<AssemblySchema>, Vec<String>) {
     let managed_dir = target.join("Managed");
     let mut dll_paths: Vec<PathBuf> = Vec::new();
-    if managed_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&managed_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.extension().is_some_and(|ext| ext == "dll") {
-                    dll_paths.push(path);
-                }
+    if managed_dir.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&managed_dir)
+    {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|ext| ext == "dll") {
+                dll_paths.push(path);
             }
         }
     }
@@ -2118,7 +2122,10 @@ fn load_managed_schemas(target: &Path) -> (Vec<AssemblySchema>, Vec<String>) {
                     notes.push(format!("{name}: {}", truncate_chars(&error.message, 80)));
                 }
             },
-            Err(error) => notes.push(format!("{name}: {}", truncate_chars(&error.to_string(), 80))),
+            Err(error) => notes.push(format!(
+                "{name}: {}",
+                truncate_chars(&error.to_string(), 80)
+            )),
         }
     }
     (assemblies, notes)
@@ -2350,7 +2357,6 @@ pub fn expand_unity_monobehaviours(
     let mut decoded: u64 = 0;
     let mut file_rows: Vec<Value> = Vec::new();
     let mut objects: Vec<Value> = Vec::new();
-    let mut objects_omitted: u64 = 0;
     let mut refusal_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut refused: u64 = 0;
     let mut total_monobehaviours: u64 = 0;
@@ -2384,7 +2390,7 @@ pub fn expand_unity_monobehaviours(
             let mut record = Map::new();
             record.insert("file".to_string(), json!(source.key));
             record.insert("path_id".to_string(), json!(payload.path_id));
-            let mut refuse = |record: &mut Map<String, Value>,
+            let refuse = |record: &mut Map<String, Value>,
                               refusal_counts: &mut BTreeMap<String, u64>,
                               file_refused: &mut u64,
                               refused: &mut u64,
@@ -2538,15 +2544,17 @@ pub fn expand_unity_monobehaviours(
             truncated_files.push(source.display.clone());
         }
     }
-    objects_omitted = total_monobehaviours.saturating_sub(objects.len() as u64);
+    let objects_omitted = total_monobehaviours.saturating_sub(objects.len() as u64);
     let classes: Vec<Value> = class_entries
         .values()
         .map(|entry| entry.info.clone())
         .collect();
-    let refusals_by_construct: Value = json!(refusal_counts
-        .iter()
-        .map(|(construct, count)| (construct.clone(), json!(count)))
-        .collect::<Map<String, Value>>());
+    let refusals_by_construct: Value = json!(
+        refusal_counts
+            .iter()
+            .map(|(construct, count)| (construct.clone(), json!(count)))
+            .collect::<Map<String, Value>>()
+    );
     let record = json!({
         "assemblies": assembly_names,
         "classes": classes,
@@ -2859,7 +2867,10 @@ mod tests {
         let mut decoder = Decoder::new(&builder);
         let root = class_node(vec![
             field("hp", Node::prim("int", "i4", 4, 4)),
-            field("name", Node::new("string".to_string(), NodeKind::String, -1, 4)),
+            field(
+                "name",
+                Node::new("string".to_string(), NodeKind::String, -1, 4),
+            ),
             field("alive", Node::prim("bool", "bool", 4, 4)),
         ]);
         let mut data = Vec::new();
@@ -2869,10 +2880,7 @@ mod tests {
         data.push(0);
         data.extend_from_slice(&1_i32.to_le_bytes());
         let value = decoder.decode_object(&root, &data, true).unwrap();
-        assert_eq!(
-            value,
-            json!({"alive": true, "hp": 42, "name": "imp"})
-        );
+        assert_eq!(value, json!({"alive": true, "hp": 42, "name": "imp"}));
     }
 
     #[test]
