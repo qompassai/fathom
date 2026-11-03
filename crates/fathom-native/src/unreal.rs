@@ -499,6 +499,93 @@ fn load_index(
     ))
 }
 
+/// Whether `key` demonstrably decrypts the pak at
+/// `path`: an encrypted index whose decrypted plaintext
+/// verifies (hash or parse, per [`load_index`]'s keyed
+/// rules), or — when the index is plain — a first
+/// encrypted entry (bounded read) whose decrypted stored
+/// bytes SHA-1-verify against its data-area header. A
+/// plain pak with no encrypted content proves nothing
+/// and returns false, as does any read or parse failure:
+/// this is a verification oracle for the key-hunt
+/// scanner, so it fails closed.
+pub(crate) fn key_decrypts_pak(path: &Path, key: &[u8; 32]) -> bool {
+    let Ok(file) = File::open(path) else {
+        return false;
+    };
+    let Ok(metadata) = file.metadata() else {
+        return false;
+    };
+    let mut reader = RegionReader {
+        file,
+        len: metadata.len(),
+    };
+    if reader.len < FOOTER_BYTES {
+        return false;
+    }
+    let Ok(footer_bytes) = reader.read_range(reader.len - FOOTER_BYTES, FOOTER_BYTES) else {
+        return false;
+    };
+    let Ok(footer) = parse_footer(&footer_bytes) else {
+        return false;
+    };
+    let Ok((index, index_encrypted)) = load_index(&mut reader, &footer, Some(key)) else {
+        return false;
+    };
+    if index_encrypted {
+        return true;
+    }
+    // Plain index: the key proves itself only on an
+    // encrypted entry.
+    let Some(fdi) = &index.fdi else {
+        return false;
+    };
+    let Ok(fdi_bytes) = reader.read_range(fdi.offset, fdi.size) else {
+        return false;
+    };
+    if hex_bytes(&Sha1::digest(&fdi_bytes)) != hex_bytes(&fdi.sha1) {
+        return false;
+    }
+    let Ok((files, _)) = parse_fdi(&fdi_bytes, &index) else {
+        return false;
+    };
+    let mut boundaries: Vec<u32> = files.iter().map(|(_, offset)| *offset).collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    for (_, blob_offset) in &files {
+        let start = *blob_offset as usize;
+        let next = boundaries
+            .iter()
+            .copied()
+            .find(|bound| *bound > *blob_offset)
+            .map(|bound| bound as usize)
+            .unwrap_or(index.encoded_entries.len());
+        let Some(segment) = index.encoded_entries.get(start..next) else {
+            continue;
+        };
+        let Ok(decoded) = decode_entry(segment) else {
+            continue;
+        };
+        let Ok(header) = parse_data_header(&mut reader, decoded.offset) else {
+            continue;
+        };
+        if !header.encrypted || decoded.compressed_size > 16_777_216 {
+            continue;
+        }
+        let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
+            vec![decoded.compressed_size]
+        } else {
+            decoded.block_sizes.clone()
+        };
+        let data_start = decoded.offset + header.header_size;
+        return match sha1_of_decrypted(&mut reader, data_start, &effective, key) {
+            Ok(digest) => digest == header.sha1,
+            Err(_) => false,
+        };
+    }
+    false
+}
+
 /// Read one entry's stored block: the plaintext span
 /// directly, or — with a key — its padded span ECB-
 /// decrypted and truncated back to the stored length.
