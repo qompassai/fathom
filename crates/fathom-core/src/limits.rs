@@ -106,6 +106,29 @@ pub const UASSET_IMPORTS_MAX: u64 = 100_000;
 /// findings; totals are always reported in full.
 pub const UASSET_LISTED_MAX: usize = 4_096;
 
+/// Largest chunk count the GameMaker census will walk.
+pub const GM_CHUNKS_MAX: usize = 4_096;
+
+/// Largest entry count accepted from one GameMaker
+/// chunk's count + offset table.
+pub const GM_ENTRIES_MAX: u64 = 1_000_000;
+
+/// Largest single string the GameMaker census reads.
+pub const GM_STRING_BYTES_MAX: u32 = 65_536;
+
+/// Largest STRG table the GameMaker census lists.
+pub const GM_STRINGS_MAX: u64 = 100_000;
+
+/// Largest entry count the XP3 census will walk.
+pub const XP3_ENTRIES_MAX: usize = 100_000;
+
+/// Largest index (stored or inflated) the XP3 reader
+/// will materialise.
+pub const XP3_INDEX_BYTES_MAX: u64 = 268_435_456;
+
+/// Largest segment count accepted for one XP3 entry.
+pub const XP3_SEGMENTS_MAX: usize = 1_024;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took

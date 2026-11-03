@@ -13,11 +13,13 @@ pub mod beam;
 pub mod cubism;
 pub mod engine;
 pub mod game;
+pub mod gamemaker;
 pub mod ghidra;
 pub mod godot;
 pub mod gpu;
 pub mod il2cpp;
 pub mod iostore;
+pub mod kirikiri;
 pub mod layout;
 pub mod python;
 pub mod renpy;
@@ -602,6 +604,22 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_gamemaker_audio",
+            ToolClass::Observe,
+            "gamemaker",
+            "Extract the AUDO chunk's embedded audio files from a GameMaker \
+             data.win into an output directory under a target root, with a \
+             manifest: each entry is [u32 size][audio bytes], written only \
+             when its declared size equals its offset-table span",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(gamemaker::extract_gamemaker_audio),
+    );
+    registry.register(
+        descriptor(
             "extract_renpy_archive",
             ToolClass::Observe,
             "renpy",
@@ -666,6 +684,24 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(unreal::extract_unreal_pak),
+    );
+    registry.register(
+        descriptor(
+            "extract_xp3_archive",
+            ToolClass::Observe,
+            "kirikiri",
+            "Extract a KiriKiri .xp3 archive's entries into an output \
+             directory under a target root, with a manifest: entry \
+             content is the concatenation of its segments in index \
+             order, inflated where flagged, written only at exactly \
+             the declared size; protected entries are recorded, \
+             never written",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(kirikiri::extract_xp3_archive),
     );
     registry.register(
         descriptor(
@@ -1049,6 +1085,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "inspect_gamemaker_datawin",
+            ToolClass::Read,
+            "gamemaker",
+            "Census one GameMaker data.win: the FORM chunk table (walked \
+             exactly to the FORM end), GEN8 display/file names, the STRG \
+             string table, and entry counts for the standard count + \
+             offset-table chunks",
+            target_schema(),
+        ),
+        Arc::new(gamemaker::inspect_gamemaker_datawin),
+    );
+    registry.register(
+        descriptor(
             "inspect_godot_pck",
             ToolClass::Read,
             "godot",
@@ -1163,6 +1212,18 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(unreal::inspect_unreal_pak),
+    );
+    registry.register(
+        descriptor(
+            "inspect_xp3_archive",
+            ToolClass::Read,
+            "kirikiri",
+            "Census one KiriKiri .xp3 archive: index form (plain or \
+             zlib-compressed), per-entry names, original/stored \
+             sizes, segment counts and compression, protection flags",
+            target_schema(),
+        ),
+        Arc::new(kirikiri::inspect_xp3_archive),
     );
     registry.register(
         descriptor(
