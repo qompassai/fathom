@@ -26,13 +26,14 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::{Confidence, Evidence, Finding, subject_for_file_with_bound};
 use fathom_core::limits::{
-    ARCHIVE_TARGET_BYTES_MAX, RPA_ENTRIES_MAX, RPA_INDEX_BYTES_MAX, RPA_PICKLE_NODES_MAX,
+    ARCHIVE_TARGET_BYTES_MAX, GAME_EXTRACT_BYTES_MAX, RPA_ENTRIES_MAX, RPA_INDEX_BYTES_MAX,
+    RPA_PICKLE_NODES_MAX,
 };
 use fathom_core::paths;
 use fathom_core::proof;
@@ -605,21 +606,10 @@ fn sha256_range(file: &mut File, file_len: u64, offset: u64, count: u64) -> Opti
     Some(hex_bytes(&hasher.finalize()))
 }
 
-pub fn inspect_renpy_archive(
-    _: &Registry,
-    config: &Config,
-    args: &Value,
-) -> Result<Value, FathomError> {
-    let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
-    let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
-    let subject_sha256 = subject.sha256.clone();
-    let file_len = subject.size_bytes;
-    let mut file = File::open(&path).map_err(|error| {
-        FathomError::new(
-            ErrorCode::TargetUnavailable,
-            format!("cannot open target: {error}"),
-        )
-    })?;
+fn parse_archive(
+    file: &mut File,
+    file_len: u64,
+) -> Result<(Header, Vec<(String, Vec<Segment>)>, usize), FathomError> {
     // Header: one line within the first 4 KiB.
     let head_len = usize::try_from(file_len.min(HEADER_LINE_MAX as u64)).unwrap_or(0);
     let mut head = vec![0_u8; head_len];
@@ -656,7 +646,7 @@ pub fn inspect_renpy_archive(
         })?;
     let index_bytes = {
         use flate2::read::ZlibDecoder;
-        let decoder = ZlibDecoder::new(&file);
+        let decoder = ZlibDecoder::new(&*file);
         let mut buffer = Vec::new();
         decoder
             .take(RPA_INDEX_BYTES_MAX as u64 + 1)
@@ -677,6 +667,30 @@ pub fn inspect_renpy_archive(
             "renpy index declares {segment_total} segments, over RPA_ENTRIES_MAX ({RPA_ENTRIES_MAX})"
         )));
     }
+    Ok((header, files, index_bytes.len()))
+}
+
+pub fn inspect_renpy_archive(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
+    let subject_sha256 = subject.sha256.clone();
+    let file_len = subject.size_bytes;
+    let mut file = File::open(&path).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot open target: {error}"),
+        )
+    })?;
+    /// Parse an RPA archive's header and index into the
+    /// shaped (path, segments) list both the census and the
+    /// extractor consume. Returns the header, the files, and
+    /// the decompressed index size.
+    let (header, files, index_bytes_len) = parse_archive(&mut file, file_len)?;
+    let segment_total: usize = files.iter().map(|(_, segs)| segs.len()).sum();
     let mut rows: Vec<Value> = Vec::with_capacity(segment_total);
     let mut examined: u64 = 0;
     let mut overrun_count: u64 = 0;
@@ -717,7 +731,7 @@ pub fn inspect_renpy_archive(
         "content_anchor": "none — RPA carries no in-format content hash; segment hashes are fathom-computed",
         "declared_files": files.len(),
         "declared_length_total": total_declared,
-        "index_decompressed_bytes": index_bytes.len(),
+        "index_decompressed_bytes": index_bytes_len,
         "index_offset": header.index_offset,
         "key": if header.variant == "RPA-3.0" { json!(header.key) } else { Value::Null },
         "key_parts": header.key_parts,
@@ -793,6 +807,274 @@ pub fn inspect_renpy_archive(
     evidence.coverage.total = segment_total as u64;
     evidence.coverage.exhaustive = false;
     Ok(evidence.to_value())
+}
+
+/// Write bytes atomically (temp file + rename) under a
+/// directory the caller named.
+fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<(), FathomError> {
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            FathomError::new(
+                ErrorCode::TargetUnavailable,
+                format!("cannot create {}: {error}", parent.display()),
+            )
+        })?;
+    }
+    let temp = destination.with_extension("part");
+    std::fs::write(&temp, bytes).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot write {}: {error}", temp.display()),
+        )
+    })?;
+    std::fs::rename(&temp, destination).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot rename to {}: {error}", destination.display()),
+        )
+    })
+}
+
+/// Reduce an archive entry path to a confined relative
+/// path: no absolute roots, no `..` components (entry
+/// paths come from the archive's own index — untrusted
+/// input). Backslashes count as separators.
+fn safe_entry_relpath(entry: &str) -> Option<PathBuf> {
+    if entry.is_empty() || entry.starts_with('/') || entry.starts_with('\\') {
+        return None;
+    }
+    let mut out = PathBuf::new();
+    for part in entry.split(['/', '\\']) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        out.push(part);
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Extract every readable file of a parsed archive
+/// under `budget` total bytes. Returns one manifest row
+/// per declared file; content is the segment prefixes
+/// followed by their stored ranges, in index order.
+fn extract_files(
+    file: &mut File,
+    file_len: u64,
+    header: &Header,
+    files: &[(String, Vec<Segment>)],
+    output_dir: &Path,
+    budget: u64,
+) -> Vec<Value> {
+    let mut rows = Vec::with_capacity(files.len());
+    let mut spent: u64 = 0;
+    for (path_entry, segments) in files {
+        let declared: i64 = segments
+            .iter()
+            .map(|segment| segment.length ^ i64::from(header.key))
+            .sum();
+        let rel = match safe_entry_relpath(path_entry) {
+            Some(rel) => rel,
+            None => {
+                rows.push(json!({
+                    "bytes": 0,
+                    "declared_bytes": declared.max(0),
+                    "path": path_entry,
+                    "segments": segments.len(),
+                    "sha256": Value::Null,
+                    "status": "refused_path",
+                }));
+                continue;
+            }
+        };
+        let mut content: Vec<u8> = Vec::new();
+        let mut readable = true;
+        for segment in segments {
+            let offset = segment.offset ^ i64::from(header.key);
+            let length = segment.length ^ i64::from(header.key);
+            let stored = length - segment.prefix.len() as i64;
+            if offset < 0 || stored < 0 || offset + stored > file_len as i64 {
+                readable = false;
+                break;
+            }
+            content.extend_from_slice(&segment.prefix);
+            let mut range = Vec::with_capacity(stored as usize);
+            let read_ok = file.seek(SeekFrom::Start(offset as u64)).is_ok()
+                && file
+                    .by_ref()
+                    .take(stored as u64)
+                    .read_to_end(&mut range)
+                    .map(|read| read == stored as usize)
+                    .unwrap_or(false);
+            if !read_ok {
+                readable = false;
+                break;
+            }
+            content.extend_from_slice(&range);
+        }
+        if !readable {
+            rows.push(json!({
+                "bytes": 0,
+                "declared_bytes": declared.max(0),
+                "path": path_entry,
+                "segments": segments.len(),
+                "sha256": Value::Null,
+                "status": "unreadable",
+            }));
+            continue;
+        }
+        if spent + content.len() as u64 > budget {
+            rows.push(json!({
+                "bytes": 0,
+                "declared_bytes": declared.max(0),
+                "path": path_entry,
+                "segments": segments.len(),
+                "sha256": Value::Null,
+                "status": "skipped_budget",
+            }));
+            continue;
+        }
+        let digest = hex_bytes(&Sha256::digest(&content));
+        match write_atomic(&output_dir.join(&rel), &content) {
+            Ok(()) => {
+                spent += content.len() as u64;
+                rows.push(json!({
+                    "bytes": content.len(),
+                    "declared_bytes": declared.max(0),
+                    "path": path_entry,
+                    "segments": segments.len(),
+                    "sha256": digest,
+                    "status": "extracted",
+                }));
+            }
+            Err(_) => {
+                rows.push(json!({
+                    "bytes": 0,
+                    "declared_bytes": declared.max(0),
+                    "path": path_entry,
+                    "segments": segments.len(),
+                    "sha256": Value::Null,
+                    "status": "unreadable",
+                }));
+            }
+        }
+    }
+    rows
+}
+
+/// Extract one RPA archive's files to a caller-named
+/// output directory with a manifest (programme rung
+/// R3). Reuses the census reader's parse exactly — the
+/// restricted pickle interpreter and the shaped index —
+/// so extraction can never disagree with the census
+/// about what an archive declares. Entry paths are
+/// confined to the output directory (see
+/// safe_entry_relpath); the manifest is written into
+/// the output directory and retained as proof.
+pub fn extract_renpy_archive(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let output_dir =
+        paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
+    let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
+    let subject_sha256 = subject.sha256.clone();
+    let file_len = subject.size_bytes;
+    let mut file = File::open(&path).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot open target: {error}"),
+        )
+    })?;
+    let (header, files, _index_bytes_len) = parse_archive(&mut file, file_len)?;
+    let rows = extract_files(
+        &mut file,
+        file_len,
+        &header,
+        &files,
+        &output_dir,
+        GAME_EXTRACT_BYTES_MAX,
+    );
+    let extracted = rows
+        .iter()
+        .filter(|row| row["status"] == "extracted")
+        .count();
+    let bytes_written: u64 = rows
+        .iter()
+        .map(|row| row["bytes"].as_u64().unwrap_or(0))
+        .sum();
+    let manifest = json!({
+        "container": path.file_name().map(|name| name.to_string_lossy().into_owned()),
+        "entries": rows,
+        "notes": [
+            "content is each segment's stored prefix followed by its stored range, in index order",
+            "RPA carries no in-format content anchor; hashes are fathom-computed",
+        ],
+        "target": path.display().to_string(),
+        "target_sha256": subject_sha256,
+        "tool": "extract_renpy_archive",
+        "totals": {
+            "bytes_written": bytes_written,
+            "entries": rows_len(&rows),
+            "extracted": extracted,
+            "refused_path": rows.iter().filter(|row| row["status"] == "refused_path").count(),
+            "skipped_budget": rows.iter().filter(|row| row["status"] == "skipped_budget").count(),
+            "unreadable": rows.iter().filter(|row| row["status"] == "unreadable").count(),
+        },
+        "variant": header.variant,
+    });
+    write_atomic(
+        &output_dir.join("manifest.json"),
+        serde_json::to_string_pretty(&manifest)
+            .unwrap_or_default()
+            .as_bytes(),
+    )?;
+    let (digest, retention_note) =
+        match proof::retain_export(config, &subject_sha256, "renpy_extract", &manifest) {
+            Ok(digest) => (Some(digest), None),
+            Err(error) => (None, Some(error.message)),
+        };
+    let mut evidence = Evidence::new("extract_renpy_archive", "renpy");
+    evidence.subject = Some(subject);
+    evidence.add_finding(Finding::new(
+        "renpy_extract",
+        Confidence::Observed,
+        json!({
+            "bytes_written": bytes_written,
+            "entries": rows_len(&rows),
+            "export_digest": digest,
+            "extracted": extracted,
+            "output_dir": output_dir.display().to_string(),
+            "variant": header.variant,
+        }),
+    ));
+    evidence.add_finding(Finding::new(
+        "entries",
+        Confidence::Observed,
+        json!({"entries": rows, "returned": rows_len(&rows), "total": rows_len(&rows)}),
+    ));
+    if let Some(note) = retention_note {
+        evidence.add_unknown(
+            "retention",
+            format!(
+                "retention failed ({note}); the extraction facts stand, but no proof can bind this run"
+            ),
+        );
+    }
+    Ok(evidence.to_value())
+}
+
+/// Row count helper (manifest totals).
+fn rows_len(rows: &[Value]) -> usize {
+    rows.len()
 }
 
 #[cfg(test)]
@@ -1172,6 +1454,131 @@ mod tests {
         let (root, result) = run("rpa-over-cap", &bytes);
         let error = result.unwrap_err();
         assert_eq!(error.code, ErrorCode::ResourceConstraint);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn run_extract(
+        test_name: &str,
+        bytes: &[u8],
+    ) -> (PathBuf, PathBuf, Result<Value, FathomError>) {
+        let root = std::env::temp_dir().join(format!(
+            "fathom-native-test-{}-{test_name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("game.rpa");
+        fs::write(&target, bytes).unwrap();
+        let out = root.join("out");
+        let config = Config::from_toml_str(&format!(
+            "state_dir = {:?}\ntarget_roots = [{:?}]\n",
+            root.join("state"),
+            root,
+        ))
+        .unwrap();
+        let args = json!({
+            "output_dir": out.display().to_string(),
+            "target": target.display().to_string(),
+        });
+        let result = extract_renpy_archive(&Registry::new(), &config, &args);
+        (root, out, result)
+    }
+
+    #[test]
+    fn validation_extract_rpa30_and_rpa20() {
+        let archive = build_30(&[
+            ("script.rpy", b"define ", b"e = Character('E')"),
+            ("images/bg.png", b"", b"\x89PNG fake"),
+        ]);
+        let (root, out, result) = run_extract("extract-30", &archive);
+        let value = result.unwrap();
+        let summary = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "renpy_extract")
+            .map(|finding| &finding["facts"])
+            .unwrap();
+        assert_eq!(summary["extracted"], 2);
+        assert_eq!(
+            fs::read(out.join("script.rpy")).unwrap(),
+            b"define e = Character('E')"
+        );
+        assert_eq!(
+            fs::read(out.join("images/bg.png")).unwrap(),
+            b"\x89PNG fake"
+        );
+        assert!(out.join("manifest.json").exists());
+        fs::remove_dir_all(&root).ok();
+
+        let archive = build_20(&[("readme.txt", b"hello renpy")]);
+        let (root, out, result) = run_extract("extract-20", &archive);
+        result.unwrap();
+        assert_eq!(fs::read(out.join("readme.txt")).unwrap(), b"hello renpy");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_extract_refuses_parent_paths() {
+        let archive = build_30(&[("../evil.txt", b"", b"pwned")]);
+        let (root, out, result) = run_extract("extract-evil", &archive);
+        let value = result.unwrap();
+        let entries = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "entries")
+            .map(|finding| &finding["facts"]["entries"])
+            .unwrap();
+        assert_eq!(entries[0]["status"], "refused_path");
+        assert!(!root.join("evil.txt").exists());
+        assert!(!out.join("evil.txt").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_extract_overrun_segment_is_unreadable() {
+        // Hand-build an RPA-3.0 whose one segment declares
+        // an offset past the end of the file.
+        let files: Vec<FileSpec> = vec![(
+            "ghost.bin",
+            vec![(999_999 ^ KEY as i32, 16 ^ KEY as i32, b"")],
+        )];
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"DATA");
+        let index_at = 34 + bytes.len();
+        let mut archive = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        archive.extend_from_slice(&bytes);
+        archive.extend_from_slice(&zlib_compress(&pickle_index_30(&files)));
+        let (root, _out, result) = run_extract("extract-ghost", &archive);
+        let value = result.unwrap();
+        let entries = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "entries")
+            .map(|finding| &finding["facts"]["entries"])
+            .unwrap();
+        assert_eq!(entries[0]["status"], "unreadable");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_extract_budget_skips_late_entries() {
+        let archive = build_30(&[("a.bin", b"", b"12345"), ("b.bin", b"", b"67890")]);
+        let root = std::env::temp_dir().join(format!(
+            "fathom-native-test-{}-extract-budget",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("game.rpa");
+        fs::write(&target, &archive).unwrap();
+        let mut file = File::open(&target).unwrap();
+        let file_len = archive.len() as u64;
+        let (header, files, _) = parse_archive(&mut file, file_len).unwrap();
+        let out = root.join("out");
+        let rows = extract_files(&mut file, file_len, &header, &files, &out, 5);
+        assert_eq!(rows[0]["status"], "extracted");
+        assert_eq!(rows[1]["status"], "skipped_budget");
         fs::remove_dir_all(&root).ok();
     }
 }
