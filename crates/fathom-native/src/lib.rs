@@ -785,10 +785,15 @@ pub fn register(registry: &mut Registry) {
              output directory under a target root, with a manifest: entries \
              are written only after their stored bytes SHA-1-verify against \
              the data-area header; Zlib entries are inflated; encrypted \
-             entries are never decrypted; other compression methods (for \
-             example Oodle) are recorded, never written",
+             entries are written only when the optional encryption_key \
+             (hex or base64) decrypts them through the same SHA-1 gate; \
+             other compression methods (for example Oodle) are recorded, \
+             never written",
             target_and(
-                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                json!({
+                    "encryption_key": {"type": "string", "description": "Optional pak encryption key: 64 hexadecimal characters (0x prefix accepted) or base64 for 32 bytes"},
+                    "output_dir": {"type": "string", "description": "Output directory under a configured target root"},
+                }),
                 &["output_dir"],
             ),
         ),
@@ -1351,11 +1356,19 @@ pub fn register(registry: &mut Registry) {
             "inspect_unreal_pak",
             ToolClass::Read,
             "unreal",
-            "Unreal Engine pak (version 11) census: footer and index SHA-1 \
+            "Unreal Engine pak (versions 11 and 12) census: footer and index SHA-1 \
              verification, full-directory paths, encoded-entry decode cross-checked \
              against data-area headers, stored-byte SHA-1 verification for every \
-             entry; encrypted entries are reported, never decrypted",
-            target_schema(),
+             entry; with the optional encryption_key (hex or base64) an encrypted \
+             index and encrypted entries are decrypted and held to the same \
+             SHA-1 gates; without one, encrypted entries are reported, never \
+             decrypted",
+            target_and(
+                json!({
+                    "encryption_key": {"type": "string", "description": "Optional pak encryption key: 64 hexadecimal characters (0x prefix accepted) or base64 for 32 bytes"},
+                }),
+                &[],
+            ),
         ),
         Arc::new(unreal::inspect_unreal_pak),
     );

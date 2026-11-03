@@ -18,12 +18,22 @@
 //! for every entry; zlib blocks are additionally decompressed
 //! and size-checked.
 //!
-//! Honesty contract: this reader never decrypts. Encrypted
-//! entries are reported with a storage-integrity fact only.
-//! The path-hash index is hash-verified and recorded, never
-//! decoded — paths come from the full directory index, which
-//! is exactly the level the estate's oracle established.
-//! Versions other than 11 refuse by name (readers SPEC §4.8).
+//! Honesty contract: decryption happens only with a
+//! caller-supplied pak encryption key. With a key, an
+//! encrypted index is trusted only after the decrypted
+//! plaintext's SHA-1 matches the footer (or, under the
+//! hash-over-ciphertext convention, after the stored
+//! hash verifies and the decryption parses), and an
+//! encrypted entry's content is claimed only after its
+//! decrypted stored bytes SHA-1-verify against the
+//! data-area header — the header itself is never
+//! encrypted. Without a key, encrypted entries are
+//! reported with a storage-integrity fact only. The
+//! path-hash index is hash-verified and recorded, never
+//! decoded — paths come from the full directory index,
+//! which is exactly the level the estate's oracle
+//! established. Versions other than 11 refuse by name
+//! (readers SPEC §4.8).
 
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
@@ -31,13 +41,14 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::aes;
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::{Confidence, Evidence, Finding, subject_for_file_with_bound};
 use fathom_core::limits::{GAME_EXTRACT_BYTES_MAX, PAK_ENTRIES_MAX, PAK_TARGET_BYTES_MAX};
 use fathom_core::paths;
 use fathom_core::proof;
-use fathom_core::registry::{Registry, require_str};
+use fathom_core::registry::{Registry, optional_str, require_str};
 
 /// The pak footer is the file's last 204 bytes.
 const FOOTER_BYTES: u64 = 204;
@@ -65,6 +76,52 @@ fn truncated(message: impl Into<String>) -> FathomError {
 
 fn unsupported(message: impl Into<String>) -> FathomError {
     FathomError::new(ErrorCode::UnsupportedTarget, message.into()).with_target("unreal pak archive")
+}
+
+/// Upper bound on one encrypted entry's stored bytes for
+/// the census's in-memory decryption. Past it the entry
+/// is storage-verified only, key or no key; extraction
+/// streams block by block and is not bound by this.
+const ENTRY_DECRYPT_BYTES_MAX: u64 = 67_108_864;
+
+/// Parse a pak encryption key: 64 hexadecimal characters
+/// (an optional `0x` prefix is accepted) or base64
+/// decoding to exactly 32 bytes. The key text is never
+/// echoed into an error or a record.
+pub fn parse_pak_key(text: &str) -> Result<[u8; 32], FathomError> {
+    use base64::Engine;
+    let invalid = |message: &str| {
+        FathomError::new(ErrorCode::InvalidRequest, message.to_string())
+            .with_target("unreal pak archive")
+    };
+    let trimmed = text.trim();
+    let hex = trimmed.strip_prefix("0x").unwrap_or(trimmed);
+    if hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        let mut key = [0_u8; 32];
+        for (index, pair) in hex.as_bytes().chunks(2).enumerate() {
+            let digits = std::str::from_utf8(pair)
+                .map_err(|_| invalid("pak encryption key is not hexadecimal"))?;
+            key[index] = u8::from_str_radix(digits, 16)
+                .map_err(|_| invalid("pak encryption key is not hexadecimal"))?;
+        }
+        return Ok(key);
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(trimmed)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(trimmed))
+        .map_err(|_| {
+            invalid("pak encryption key must be 64 hex characters or base64 for 32 bytes")
+        })?;
+    <[u8; 32]>::try_from(decoded.as_slice())
+        .map_err(|_| invalid("pak encryption key must decode to exactly 32 bytes"))
+}
+
+/// The stored span one compression block occupies when
+/// its entry is encrypted: the stored length rounded up
+/// to the AES block size. Writers zero-pad each block
+/// before encrypting it (ECB, per block).
+fn encrypted_span(stored_len: u64) -> u64 {
+    stored_len.div_ceil(16) * 16
 }
 
 /// Seek-based region reads over the target, opened once.
@@ -368,6 +425,152 @@ fn parse_index(bytes: &[u8]) -> Result<Index, FathomError> {
     })
 }
 
+/// Read the index region and establish trust in it,
+/// returning the parsed index and whether it was
+/// encrypted. The trust rules, in order:
+///
+/// 1. The stored bytes' SHA-1 matches the footer and
+///    they parse: a plain index (the only path without
+///    a key, byte-identical to the pre-decryption
+///    reader).
+/// 2. With a key: ECB-decrypt the region and accept a
+///    prefix (the plaintext may carry up to 15 trailing
+///    zero padding bytes) whose SHA-1 matches the footer
+///    and which parses.
+/// 3. With a key, when the footer hash covers the stored
+///    ciphertext instead: accept a decrypted prefix that
+///    parses.
+///
+/// Anything else keeps the existing typed refusals: a
+/// hash mismatch with no working decryption, or the
+/// structural mismatch of a hash-verified region that
+/// does not parse.
+fn load_index(
+    reader: &mut RegionReader,
+    footer: &Footer,
+    key: Option<&[u8; 32]>,
+) -> Result<(Index, bool), FathomError> {
+    let stored = reader.read_range(footer.index_offset, footer.index_size)?;
+    let stored_hash_ok = hex_bytes(&Sha1::digest(&stored)) == hex_bytes(&footer.index_sha1);
+    if stored_hash_ok {
+        if let Ok(index) = parse_index(&stored) {
+            return Ok((index, false));
+        }
+    }
+    let Some(key) = key else {
+        if !stored_hash_ok {
+            return Err(mismatch(
+                "pak index SHA-1 does not match the footer; nothing is claimed from the index",
+            ));
+        }
+        return parse_index(&stored).map(|index| (index, false));
+    };
+    if stored.len() % 16 == 0 && !stored.is_empty() {
+        let decrypted = aes::ecb_decrypt(key, &stored)?;
+        for trim in 0..=15_usize {
+            if trim > decrypted.len() {
+                break;
+            }
+            if trim > 0
+                && decrypted[decrypted.len() - trim..]
+                    .iter()
+                    .any(|byte| *byte != 0)
+            {
+                continue;
+            }
+            let candidate = &decrypted[..decrypted.len() - trim];
+            if hex_bytes(&Sha1::digest(candidate)) == hex_bytes(&footer.index_sha1) {
+                return parse_index(candidate).map(|index| (index, true));
+            }
+            if stored_hash_ok {
+                if let Ok(index) = parse_index(candidate) {
+                    return Ok((index, true));
+                }
+            }
+        }
+    }
+    if stored_hash_ok {
+        return parse_index(&stored).map(|index| (index, false));
+    }
+    Err(mismatch(
+        "pak index SHA-1 does not match the footer, and the supplied key's \
+         decryption does not verify either; the key is wrong or the index \
+         is corrupt — nothing is claimed from the index",
+    ))
+}
+
+/// Read one entry's stored block: the plaintext span
+/// directly, or — with a key — its padded span ECB-
+/// decrypted and truncated back to the stored length.
+fn read_stored_block(
+    reader: &mut RegionReader,
+    at: u64,
+    stored_len: u64,
+    key: Option<&[u8; 32]>,
+) -> Result<Vec<u8>, FathomError> {
+    let Some(key) = key else {
+        return reader.read_range(at, stored_len);
+    };
+    let cipher = reader.read_range(at, encrypted_span(stored_len))?;
+    let mut plain = aes::ecb_decrypt(key, &cipher)?;
+    plain.truncate(usize::try_from(stored_len).unwrap_or(usize::MAX));
+    Ok(plain)
+}
+
+/// One encrypted entry's full plaintext stored bytes:
+/// every block decrypted and concatenated. Callers bound
+/// the total before calling (the census caps it at
+/// ENTRY_DECRYPT_BYTES_MAX).
+fn decrypted_entry_bytes(
+    reader: &mut RegionReader,
+    data_start: u64,
+    block_sizes: &[u64],
+    key: &[u8; 32],
+) -> Result<Vec<u8>, FathomError> {
+    let mut plain = Vec::new();
+    let mut at = data_start;
+    for size in block_sizes {
+        let block = read_stored_block(reader, at, *size, Some(key))?;
+        at += encrypted_span(*size);
+        plain.extend_from_slice(&block);
+    }
+    Ok(plain)
+}
+
+/// Split decrypted stored bytes back into their blocks
+/// for content verification.
+fn split_blocks<'a>(plain: &'a [u8], block_sizes: &[u64]) -> Vec<&'a [u8]> {
+    let mut blocks = Vec::with_capacity(block_sizes.len());
+    let mut at = 0_usize;
+    for size in block_sizes {
+        let size = usize::try_from(*size).unwrap_or(0);
+        let end = (at + size).min(plain.len());
+        blocks.push(&plain[at..end]);
+        at = end;
+    }
+    blocks
+}
+
+/// SHA-1 over one encrypted entry's decrypted stored
+/// bytes, streamed block by block (the extraction gate:
+/// the digest must equal the data-area header's SHA-1
+/// over the plaintext before any payload is written).
+fn sha1_of_decrypted(
+    reader: &mut RegionReader,
+    data_start: u64,
+    block_sizes: &[u64],
+    key: &[u8; 32],
+) -> Result<String, FathomError> {
+    let mut hasher = Sha1::new();
+    let mut at = data_start;
+    for size in block_sizes {
+        let block = read_stored_block(reader, at, *size, Some(key))?;
+        at += encrypted_span(*size);
+        hasher.update(&block);
+    }
+    Ok(hex_bytes(&hasher.finalize()))
+}
+
 /// The full directory index, decoded: (path, blob offset)
 /// pairs in FDI order, plus the directory count.
 fn parse_fdi(bytes: &[u8], index: &Index) -> Result<(Vec<(String, u32)>, u32), FathomError> {
@@ -590,12 +793,22 @@ fn verify_zlib_content(
     block_sizes: &[u64],
     uncompressed_size: u64,
 ) -> Result<bool, FathomError> {
-    use flate2::read::ZlibDecoder;
-    let mut produced: u64 = 0;
+    let mut blocks: Vec<Vec<u8>> = Vec::with_capacity(block_sizes.len());
     let mut at = data_start;
     for size in block_sizes {
-        let stored = reader.read_range(at, *size)?;
+        blocks.push(reader.read_range(at, *size)?);
         at += size;
+    }
+    let refs: Vec<&[u8]> = blocks.iter().map(Vec::as_slice).collect();
+    zlib_blocks_verify(&refs, uncompressed_size)
+}
+
+/// The block-wise zlib check over in-memory blocks (the
+/// decrypted-entry path verifies through here).
+fn zlib_blocks_verify(blocks: &[&[u8]], uncompressed_size: u64) -> Result<bool, FathomError> {
+    use flate2::read::ZlibDecoder;
+    let mut produced: u64 = 0;
+    for stored in blocks {
         let decoder = ZlibDecoder::new(&stored[..]);
         let mut sink = Vec::new();
         let read = decoder
@@ -626,6 +839,10 @@ pub fn inspect_unreal_pak(
     args: &Value,
 ) -> Result<Value, FathomError> {
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let key = match optional_str(args, "encryption_key") {
+        Some(text) => Some(parse_pak_key(text)?),
+        None => None,
+    };
     let subject = subject_for_file_with_bound(&path, PAK_TARGET_BYTES_MAX)?;
     let subject_sha256 = subject.sha256.clone();
     let file = File::open(&path).map_err(|error| {
@@ -643,14 +860,9 @@ pub fn inspect_unreal_pak(
     }
     let footer_bytes = reader.read_range(reader.len - FOOTER_BYTES, FOOTER_BYTES)?;
     let footer = parse_footer(&footer_bytes)?;
-    // The index is trusted only after its SHA-1 verifies.
-    let index_bytes = reader.read_range(footer.index_offset, footer.index_size)?;
-    if hex_bytes(&Sha1::digest(&index_bytes)) != hex_bytes(&footer.index_sha1) {
-        return Err(mismatch(
-            "pak index SHA-1 does not match the footer; nothing is claimed from the index",
-        ));
-    }
-    let index = parse_index(&index_bytes)?;
+    // The index is trusted only after its SHA-1 verifies —
+    // over the plaintext, when a key decrypts it.
+    let (index, index_encrypted) = load_index(&mut reader, &footer, key.as_ref())?;
     let mut phi_facts = (false, None, None, None, false);
     if let Some(phi) = &index.phi {
         let region = reader.read_range(phi.offset, phi.size)?;
@@ -685,7 +897,9 @@ pub fn inspect_unreal_pak(
     boundaries.dedup();
     let mut rows: Vec<Value> = Vec::with_capacity(files.len());
     let mut examined: u64 = 0;
+    let mut decrypted_count: u64 = 0;
     let mut encrypted_count: u64 = 0;
+    let mut encrypted_flagged_count: u64 = 0;
     let mut header_mismatch_count: u64 = 0;
     let mut inconsistent_count: u64 = 0;
     let mut layout_p_count: u64 = 0;
@@ -732,6 +946,7 @@ pub fn inspect_unreal_pak(
             "blocks": decoded.blocks,
             "compressed_size": decoded.compressed_size,
             "content_verified": Value::Null,
+            "decrypted": false,
             "encrypted": false,
             "header_offset": Value::Null,
             "layout": decoded.layout,
@@ -781,9 +996,60 @@ pub fn inspect_unreal_pak(
         }
         let data_start = decoded.offset + header.header_size;
         if header.encrypted {
-            // Storage integrity only: the stored bytes are
-            // hashed, never decrypted, never claimed as
-            // content (readers SPEC §4.5).
+            encrypted_flagged_count += 1;
+            if let Some(key) = key.as_ref() {
+                if decoded.compressed_size <= ENTRY_DECRYPT_BYTES_MAX {
+                    let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
+                        vec![decoded.compressed_size]
+                    } else {
+                        decoded.block_sizes.clone()
+                    };
+                    match decrypted_entry_bytes(&mut reader, data_start, &effective, key) {
+                        Ok(plain) => {
+                            let verified = hex_bytes(&Sha1::digest(&plain)) == header.sha1;
+                            row["stored_sha1_verified"] = json!(verified);
+                            row["decrypted"] = json!(true);
+                            if !verified {
+                                row["status"] = json!("sha1_mismatch");
+                                sha1_mismatch_count += 1;
+                                rows.push(row);
+                                continue;
+                            }
+                            examined += 1;
+                            decrypted_count += 1;
+                            row["status"] = json!("verified");
+                            match method_name.as_deref() {
+                                Some("None") => {
+                                    row["content_verified"] = json!(true);
+                                }
+                                Some("Zlib") => {
+                                    let blocks = split_blocks(&plain, &effective);
+                                    let ok =
+                                        zlib_blocks_verify(&blocks, decoded.uncompressed_size)?;
+                                    row["content_verified"] = json!(ok);
+                                }
+                                Some(other)
+                                    if !unverifiable_methods.contains(&other.to_string()) =>
+                                {
+                                    unverifiable_methods.push(other.to_string());
+                                }
+                                _ => {}
+                            }
+                            rows.push(row);
+                            continue;
+                        }
+                        Err(_) => {
+                            row["status"] = json!("unreadable");
+                            rows.push(row);
+                            continue;
+                        }
+                    }
+                }
+            }
+            // Storage integrity only (no key supplied, or the
+            // entry is over the in-memory decrypt bound): the
+            // stored bytes are hashed, never decrypted, never
+            // claimed as content (readers SPEC §4.5).
             encrypted_count += 1;
             match reader.sha1_range(data_start, decoded.compressed_size) {
                 Ok(digest) => {
@@ -852,10 +1118,12 @@ pub fn inspect_unreal_pak(
         .collect();
     let record = json!({
         "declared_entries": index.file_count,
+        "decrypted_entries": decrypted_count,
         "encoded_blob_bytes": index.encoded_entries.len(),
         "encoded_single_block_entries": layout_p_count,
         "encoded_standard_entries": layout_n_count,
-        "encrypted_entries": encrypted_count,
+        "encrypted_entries": encrypted_flagged_count,
+        "encryption_key_supplied": key.is_some(),
         "fdi_directory_count": directory_count,
         "fdi_offset": fdi.offset,
         "fdi_present": true,
@@ -864,6 +1132,7 @@ pub fn inspect_unreal_pak(
         "fdi_size": fdi.size,
         "header_mismatch_entries": header_mismatch_count,
         "index_inconsistent_entries": inconsistent_count,
+        "index_encrypted": index_encrypted,
         "index_offset": footer.index_offset,
         "index_sha1": hex_bytes(&footer.index_sha1),
         "index_sha1_verified": true,
@@ -926,9 +1195,19 @@ pub fn inspect_unreal_pak(
     if encrypted_count > 0 {
         evidence.add_unknown(
             "entry contents",
-            format!(
-                "{encrypted_count} of {total} entries are encrypted; only their stored-byte integrity was checked — pak decryption is NOT-IMPLEMENTED"
-            ),
+            if key.is_some() {
+                format!(
+                    "{encrypted_count} of {total} entries are encrypted and over \
+                     the reader's in-memory decrypt bound; only their stored-byte \
+                     integrity was checked"
+                )
+            } else {
+                format!(
+                    "{encrypted_count} of {total} entries are encrypted; only \
+                     their stored-byte integrity was checked — no pak encryption \
+                     key was supplied"
+                )
+            },
         );
     }
     if header_mismatch_count > 0 {
@@ -1046,12 +1325,15 @@ fn write_atomic(root: &Path, rel: &Path, bytes: &[u8]) -> Result<(), FathomError
 /// the stored bytes; Zlib inflates block by block with
 /// the census's own accounting. Callers have already
 /// SHA-1-verified the stored bytes against the data-area
-/// header, so what is written is verified content.
+/// header, so what is written is verified content. With
+/// `key`, the entry's stored blocks are the decrypted
+/// spans (the caller has verified the plaintext hash).
 fn write_payload(
     reader: &mut RegionReader,
     decoded: &DecodedEntry,
     data_start: u64,
     method_name: &str,
+    key: Option<&[u8; 32]>,
     out_file: &mut File,
 ) -> Result<(u64, String), FathomError> {
     use flate2::read::ZlibDecoder;
@@ -1078,9 +1360,13 @@ fn write_payload(
         let mut left = decoded.compressed_size;
         while left > 0 {
             let take = left.min(65_536);
-            let chunk = reader.read_range(at, take)?;
+            let chunk = read_stored_block(reader, at, take, key)?;
             sink(&chunk, &mut hasher, &mut produced, out_file)?;
-            at += take;
+            at += if key.is_some() {
+                encrypted_span(take)
+            } else {
+                take
+            };
             left -= take;
         }
     } else {
@@ -1092,8 +1378,12 @@ fn write_payload(
         };
         let mut at = data_start;
         for size in &effective {
-            let stored = reader.read_range(at, *size)?;
-            at += size;
+            let stored = read_stored_block(reader, at, *size, key)?;
+            at += if key.is_some() {
+                encrypted_span(*size)
+            } else {
+                *size
+            };
             let decoder = ZlibDecoder::new(&stored[..]);
             let mut block = Vec::new();
             decoder
@@ -1120,7 +1410,10 @@ fn write_payload(
 /// SHA-1 verifies, paths are FDI-authoritative, every
 /// entry is cross-checked against its data-area header
 /// and SHA-1-verified before a byte is written.
-/// Encrypted entries are never decrypted; entries in
+/// With an `encryption_key`, encrypted entries are
+/// decrypted and held to the same SHA-1 gate (over the
+/// decrypted stored bytes) before writing; without one
+/// they are recorded, never written. Entries in
 /// compression methods this lane does not decode (for
 /// example Oodle) are recorded, never written — the
 /// stored bytes are not the content.
@@ -1132,6 +1425,10 @@ pub fn extract_unreal_pak(
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
     let output_dir =
         paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
+    let key = match optional_str(args, "encryption_key") {
+        Some(text) => Some(parse_pak_key(text)?),
+        None => None,
+    };
     let subject = subject_for_file_with_bound(&path, PAK_TARGET_BYTES_MAX)?;
     let subject_sha256 = subject.sha256.clone();
     let file = File::open(&path).map_err(|error| {
@@ -1149,13 +1446,7 @@ pub fn extract_unreal_pak(
     }
     let footer_bytes = reader.read_range(reader.len - FOOTER_BYTES, FOOTER_BYTES)?;
     let footer = parse_footer(&footer_bytes)?;
-    let index_bytes = reader.read_range(footer.index_offset, footer.index_size)?;
-    if hex_bytes(&Sha1::digest(&index_bytes)) != hex_bytes(&footer.index_sha1) {
-        return Err(mismatch(
-            "pak index SHA-1 does not match the footer; nothing is claimed from the index",
-        ));
-    }
-    let index = parse_index(&index_bytes)?;
+    let (index, _index_encrypted) = load_index(&mut reader, &footer, key.as_ref())?;
     let Some(fdi) = &index.fdi else {
         return Err(unsupported(
             "pak carries no full directory index; entry paths cannot be established",
@@ -1179,6 +1470,7 @@ pub fn extract_unreal_pak(
     boundaries.dedup();
     let mut rows: Vec<Value> = Vec::with_capacity(files.len());
     let mut counts: std::collections::BTreeMap<&str, u64> = Default::default();
+    let mut decrypted_entries: u64 = 0;
     let mut spent: u64 = 0;
     for (path_entry, blob_offset) in &files {
         let start = *blob_offset as usize;
@@ -1191,6 +1483,7 @@ pub fn extract_unreal_pak(
         let segment = &index.encoded_entries[start..next];
         let mut row = json!({
             "bytes": 0,
+            "decrypted": false,
             "method": Value::Null,
             "path": path_entry,
             "sha256": Value::Null,
@@ -1249,19 +1542,44 @@ pub fn extract_unreal_pak(
             continue;
         }
         let data_start = decoded.offset + header.header_size;
+        let mut entry_key: Option<&[u8; 32]> = None;
         if header.encrypted {
-            finish(&mut rows, &mut counts, row, "encrypted");
-            continue;
-        }
-        match reader.sha1_range(data_start, decoded.compressed_size) {
-            Ok(digest) if digest == header.sha1 => {}
-            Ok(_) => {
-                finish(&mut rows, &mut counts, row, "sha1_mismatch");
+            let Some(candidate) = key.as_ref() else {
+                finish(&mut rows, &mut counts, row, "encrypted");
                 continue;
+            };
+            let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
+                vec![decoded.compressed_size]
+            } else {
+                decoded.block_sizes.clone()
+            };
+            match sha1_of_decrypted(&mut reader, data_start, &effective, candidate) {
+                Ok(digest) if digest == header.sha1 => {
+                    entry_key = Some(candidate);
+                    row["decrypted"] = json!(true);
+                    decrypted_entries += 1;
+                }
+                Ok(_) => {
+                    finish(&mut rows, &mut counts, row, "sha1_mismatch");
+                    continue;
+                }
+                Err(_) => {
+                    finish(&mut rows, &mut counts, row, "unreadable");
+                    continue;
+                }
             }
-            Err(_) => {
-                finish(&mut rows, &mut counts, row, "unreadable");
-                continue;
+        }
+        if entry_key.is_none() {
+            match reader.sha1_range(data_start, decoded.compressed_size) {
+                Ok(digest) if digest == header.sha1 => {}
+                Ok(_) => {
+                    finish(&mut rows, &mut counts, row, "sha1_mismatch");
+                    continue;
+                }
+                Err(_) => {
+                    finish(&mut rows, &mut counts, row, "unreadable");
+                    continue;
+                }
             }
         }
         let method = method_name.as_deref().unwrap_or("");
@@ -1293,7 +1611,14 @@ pub fn extract_unreal_pak(
                 format!("cannot create output file: {error}"),
             )
         })?;
-        match write_payload(&mut reader, &decoded, data_start, method, &mut out_file) {
+        match write_payload(
+            &mut reader,
+            &decoded,
+            data_start,
+            method,
+            entry_key,
+            &mut out_file,
+        ) {
             Ok((produced, sha256)) => {
                 drop(out_file);
                 std::fs::rename(&temp, &destination).map_err(|error| {
@@ -1326,16 +1651,30 @@ pub fn extract_unreal_pak(
         "unreadable": counts.get("unreadable").copied().unwrap_or(0),
         "unsupported_compression": counts.get("unsupported_compression").copied().unwrap_or(0),
     });
+    let mut notes: Vec<Value> = vec![
+        json!(
+            "payloads are written only after the entry's stored bytes SHA-1-verify against its data-area header"
+        ),
+        json!(
+            "encrypted entries are written only when an encryption_key was supplied and their decrypted stored bytes SHA-1-verified; otherwise they are recorded, never written"
+        ),
+        json!(
+            "compression methods other than None and Zlib are recorded as unsupported_compression, never written: stored bytes are not the content"
+        ),
+        json!(
+            "entry paths are mount-relative; leading parent segments are stripped and any remaining parent segment refuses the entry"
+        ),
+    ];
+    if decrypted_entries > 0 {
+        notes.push(json!(
+            "this run decrypted entries with the caller-supplied encryption key"
+        ));
+    }
     let manifest = json!({
         "archive": path.display().to_string(),
         "entries": rows,
         "format": format!("Unreal pak version {}", footer.version),
-        "notes": [
-            "payloads are written only after the entry's stored bytes SHA-1-verify against its data-area header",
-            "encrypted entries are never decrypted and never written",
-            "compression methods other than None and Zlib are recorded as unsupported_compression, never written: stored bytes are not the content",
-            "entry paths are mount-relative; leading parent segments are stripped and any remaining parent segment refuses the entry",
-        ],
+        "notes": notes,
         "totals": totals,
         "version": footer.version,
     });
@@ -1362,6 +1701,7 @@ pub fn extract_unreal_pak(
         Confidence::Observed,
         json!({
             "bytes_written": spent,
+            "decrypted_entries": decrypted_entries,
             "entries": files.len(),
             "export_digest": digest,
             "extracted": counts.get("extracted").copied().unwrap_or(0),
@@ -1446,6 +1786,8 @@ mod tests {
     }
 
     struct Options {
+        encrypt_index: bool,
+        encryption_key: Option<[u8; 32]>,
         file_count_override: Option<i32>,
         fdi_present: bool,
         phi_present: bool,
@@ -1456,6 +1798,8 @@ mod tests {
     impl Default for Options {
         fn default() -> Self {
             Options {
+                encrypt_index: false,
+                encryption_key: None,
                 file_count_override: None,
                 fdi_present: true,
                 phi_present: true,
@@ -1472,7 +1816,12 @@ mod tests {
         type BuiltEntry = (u64, u64, u64, u32, Vec<u8>, Vec<u8>);
         let mut entries: Vec<BuiltEntry> = Vec::new();
         for entry in specs {
-            let stored = if entry.method == 1 && !entry.encrypted {
+            // An entry is really encrypted when it is flagged
+            // and the build carries a key: its stored bytes
+            // are then the genuine (possibly zlib) stored
+            // bytes, ECB-encrypted per block span.
+            let really_encrypted = entry.encrypted && options.encryption_key.is_some();
+            let stored = if entry.method == 1 && (!entry.encrypted || really_encrypted) {
                 match &entry.blocks {
                     Some(blocks) => {
                         let mut all = Vec::new();
@@ -1488,6 +1837,40 @@ mod tests {
             } else {
                 entry.content.clone()
             };
+            // The stored length of each compression block —
+            // the header table's (start, end) pairs and the
+            // encryption spans both derive from these.
+            let block_stored_sizes: Vec<u64> = if entry.method == 0 {
+                vec![stored.len() as u64]
+            } else {
+                match &entry.blocks {
+                    Some(blocks) => (0..blocks.len())
+                        .map(|i| {
+                            zlib_compress(
+                                &entry.content[blocks[..i].iter().sum::<usize>()
+                                    ..blocks[..=i].iter().sum::<usize>()],
+                            )
+                            .len() as u64
+                        })
+                        .collect(),
+                    None => vec![stored.len() as u64],
+                }
+            };
+            let file_bytes: Vec<u8> = if really_encrypted {
+                let key = options.encryption_key.as_ref().unwrap();
+                let mut cipher = Vec::new();
+                let mut at = 0_usize;
+                for size in &block_stored_sizes {
+                    let size = *size as usize;
+                    let mut block = stored[at..at + size].to_vec();
+                    block.resize(encrypted_span(size as u64) as usize, 0);
+                    cipher.extend_from_slice(&crate::aes::ecb_encrypt(key, &block).unwrap());
+                    at += size;
+                }
+                cipher
+            } else {
+                stored.clone()
+            };
             let offset = out.len() as u64;
             header_at.push(out.len());
             out.extend_from_slice(&(offset as i64).to_le_bytes());
@@ -1496,21 +1879,12 @@ mod tests {
             out.extend_from_slice(&entry.method.to_le_bytes());
             out.extend_from_slice(&Sha1::digest(&stored));
             if entry.method != 0 {
-                let block_count = entry.blocks.as_ref().map_or(1, |b| b.len()) as i32;
-                out.extend_from_slice(&block_count.to_le_bytes());
+                out.extend_from_slice(&(block_stored_sizes.len() as i32).to_le_bytes());
                 let mut at = 0_u64;
-                for i in 0..block_count {
-                    let block_stored = match &entry.blocks {
-                        Some(blocks) => zlib_compress(
-                            &entry.content[blocks[..i as usize].iter().sum::<usize>()
-                                ..blocks[..=i as usize].iter().sum::<usize>()],
-                        )
-                        .len() as u64,
-                        None => stored.len() as u64,
-                    };
+                for size in &block_stored_sizes {
                     out.extend_from_slice(&at.to_le_bytes());
-                    out.extend_from_slice(&(at + block_stored).to_le_bytes());
-                    at += block_stored;
+                    out.extend_from_slice(&(at + size).to_le_bytes());
+                    at += size;
                 }
             }
             out.push(u8::from(entry.encrypted));
@@ -1522,7 +1896,7 @@ mod tests {
                 65_536
             };
             out.extend_from_slice(&header_block_size.to_le_bytes());
-            out.extend_from_slice(&stored);
+            out.extend_from_slice(&file_bytes);
             entries.push((
                 offset,
                 stored.len() as u64,
@@ -1639,12 +2013,23 @@ mod tests {
             index.push(0);
         }
         let index_sha1 = Sha1::digest(&index);
-        out.extend_from_slice(&index);
+        let index_stored_len = if options.encrypt_index {
+            let key = options
+                .encryption_key
+                .expect("encrypt_index requires an encryption_key");
+            let mut padded = index.clone();
+            padded.resize(encrypted_span(padded.len() as u64) as usize, 0);
+            out.extend_from_slice(&crate::aes::ecb_encrypt(&key, &padded).unwrap());
+            padded.len()
+        } else {
+            out.extend_from_slice(&index);
+            index.len()
+        };
         // Footer.
         out.extend_from_slice(&PAK_MAGIC);
         out.extend_from_slice(&options.version.to_le_bytes());
         out.extend_from_slice(&(index_at as i64).to_le_bytes());
-        out.extend_from_slice(&(index.len() as i64).to_le_bytes());
+        out.extend_from_slice(&(index_stored_len as i64).to_le_bytes());
         out.extend_from_slice(&index_sha1);
         let mut slot = [0_u8; 32];
         slot[..4].copy_from_slice(b"Zlib");
@@ -1658,6 +2043,10 @@ mod tests {
     }
 
     fn run_inspect(test_name: &str, bytes: &[u8]) -> (PathBuf, Value) {
+        run_inspect_with(test_name, bytes, None)
+    }
+
+    fn run_inspect_with(test_name: &str, bytes: &[u8], key_hex: Option<&str>) -> (PathBuf, Value) {
         let root = std::env::temp_dir().join(format!(
             "fathom-native-test-{}-{test_name}",
             std::process::id()
@@ -1671,12 +2060,23 @@ mod tests {
             root,
         ))
         .unwrap();
-        let args = json!({"target": target.display().to_string()});
+        let mut args = json!({"target": target.display().to_string()});
+        if let Some(key_hex) = key_hex {
+            args["encryption_key"] = json!(key_hex);
+        }
         let value = inspect_unreal_pak(&Registry::new(), &config, &args).unwrap();
         (root, value)
     }
 
     fn run_err(test_name: &str, bytes: &[u8]) -> (PathBuf, FathomError) {
+        run_err_with(test_name, bytes, None)
+    }
+
+    fn run_err_with(
+        test_name: &str,
+        bytes: &[u8],
+        key_hex: Option<&str>,
+    ) -> (PathBuf, FathomError) {
         let root = std::env::temp_dir().join(format!(
             "fathom-native-test-{}-{test_name}",
             std::process::id()
@@ -1690,7 +2090,10 @@ mod tests {
             root,
         ))
         .unwrap();
-        let args = json!({"target": target.display().to_string()});
+        let mut args = json!({"target": target.display().to_string()});
+        if let Some(key_hex) = key_hex {
+            args["encryption_key"] = json!(key_hex);
+        }
         let error = inspect_unreal_pak(&Registry::new(), &config, &args).unwrap_err();
         (root, error)
     }
@@ -2023,6 +2426,14 @@ mod tests {
         test_name: &str,
         bytes: &[u8],
     ) -> (PathBuf, PathBuf, Result<Value, FathomError>) {
+        run_extract_with(test_name, bytes, None)
+    }
+
+    fn run_extract_with(
+        test_name: &str,
+        bytes: &[u8],
+        key_hex: Option<&str>,
+    ) -> (PathBuf, PathBuf, Result<Value, FathomError>) {
         let root = std::env::temp_dir().join(format!(
             "fathom-native-test-{}-{test_name}",
             std::process::id()
@@ -2037,10 +2448,13 @@ mod tests {
             root,
         ))
         .unwrap();
-        let args = json!({
+        let mut args = json!({
             "output_dir": out.display().to_string(),
             "target": target.display().to_string(),
         });
+        if let Some(key_hex) = key_hex {
+            args["encryption_key"] = json!(key_hex);
+        }
         let result = extract_unreal_pak(&Registry::new(), &config, &args);
         (root, out, result)
     }
@@ -2145,6 +2559,185 @@ mod tests {
         assert_eq!(extract_rows(&value)[0]["status"], "refused_path");
         assert!(!root.join("evil.txt").exists());
         assert!(!out.join("Game/evil.txt").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    // D-704 item 2: pak decryption under a caller key. The
+    // corpus holds no encrypted pak, so these synthetic
+    // writer fixtures are the gate.
+
+    const TEST_KEY: [u8; 32] = [0x2a; 32];
+
+    fn test_key_hex() -> String {
+        TEST_KEY.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    fn encrypted_spec(dir: &'static str, name: &'static str, content: &[u8], method: u32) -> Spec {
+        let mut entry = spec(dir, name, content, method);
+        entry.encrypted = true;
+        entry
+    }
+
+    #[test]
+    fn decryption_key_parsing_forms() {
+        use base64::Engine;
+        let hex = test_key_hex();
+        assert_eq!(parse_pak_key(&hex).unwrap(), TEST_KEY);
+        assert_eq!(parse_pak_key(&format!("0x{hex}")).unwrap(), TEST_KEY);
+        let b64 = base64::engine::general_purpose::STANDARD.encode(TEST_KEY);
+        assert_eq!(parse_pak_key(&b64).unwrap(), TEST_KEY);
+        for bad in ["", "abcd", "not a key at all"] {
+            let err = parse_pak_key(bad).unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidRequest, "{bad}");
+        }
+        let short = base64::engine::general_purpose::STANDARD.encode([1_u8; 16]);
+        let err = parse_pak_key(&short).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn decryption_index_and_entries_verify_with_key() {
+        let zlib_content: Vec<u8> = (0..5000_u32).map(|i| (i % 251) as u8).collect();
+        let none_content = b"stored bytes under encryption".to_vec();
+        let plain_content = vec![b'p'; 999];
+        let specs = vec![
+            encrypted_spec("Game/Content/", "a.uasset", &zlib_content, 1),
+            encrypted_spec("Game/Content/", "b.txt", &none_content, 0),
+            spec("Game/Content/", "c.txt", &plain_content, 1),
+        ];
+        let built = build(
+            &specs,
+            &Options {
+                encrypt_index: true,
+                encryption_key: Some(TEST_KEY),
+                ..Options::default()
+            },
+        );
+        // Without the key the index hash refuses everything.
+        let (root, error) = run_err("pak-dec-nokey", &built.bytes);
+        assert_eq!(error.code, ErrorCode::ArtifactIntegrityMismatch);
+        fs::remove_dir_all(&root).ok();
+        // With the key the census verifies end to end.
+        let (root, value) = run_inspect_with("pak-dec-key", &built.bytes, Some(&test_key_hex()));
+        assert_eq!(value["status"], "complete");
+        let facts = pak_facts(&value);
+        assert_eq!(facts["index_encrypted"], true);
+        assert_eq!(facts["encryption_key_supplied"], true);
+        assert_eq!(facts["encrypted_entries"], 2);
+        assert_eq!(facts["decrypted_entries"], 2);
+        let rows = entry_rows(&value);
+        assert_eq!(rows[0]["status"], "verified");
+        assert_eq!(rows[0]["decrypted"], true);
+        assert_eq!(rows[0]["content_verified"], true);
+        assert_eq!(rows[1]["status"], "verified");
+        assert_eq!(rows[1]["decrypted"], true);
+        assert_eq!(rows[2]["decrypted"], false);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn decryption_wrong_key_index_is_a_typed_error() {
+        let specs = vec![spec("Game/", "a.bin", b"hello", 0)];
+        let built = build(
+            &specs,
+            &Options {
+                encrypt_index: true,
+                encryption_key: Some(TEST_KEY),
+                ..Options::default()
+            },
+        );
+        let wrong_hex: String = [0x11_u8; 32]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (root, error) = run_err_with("pak-dec-wrongkey", &built.bytes, Some(&wrong_hex));
+        assert_eq!(error.code, ErrorCode::ArtifactIntegrityMismatch);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn decryption_wrong_key_entries_fail_the_sha1_gate() {
+        let content: Vec<u8> = (0..2000_u32).map(|i| (i % 253) as u8).collect();
+        let specs = vec![encrypted_spec("Game/", "a.uasset", &content, 1)];
+        let built = build(
+            &specs,
+            &Options {
+                encryption_key: Some(TEST_KEY),
+                ..Options::default()
+            },
+        );
+        let wrong_hex: String = [0x11_u8; 32]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (root, value) = run_inspect_with("pak-dec-wrongentry", &built.bytes, Some(&wrong_hex));
+        assert_eq!(value["status"], "partial");
+        let rows = entry_rows(&value);
+        assert_eq!(rows[0]["status"], "sha1_mismatch");
+        assert_eq!(rows[0]["stored_sha1_verified"], false);
+        let facts = pak_facts(&value);
+        assert_eq!(facts["decrypted_entries"], 0);
+        assert_eq!(facts["sha1_mismatch_entries"], 1);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn decryption_extract_writes_plaintext_only_with_key() {
+        let zlib_content = vec![b'z'; 4000];
+        let none_content = b"plain stored secret".to_vec();
+        let specs = vec![
+            encrypted_spec("../../../Game/Content/", "packed.txt", &zlib_content, 1),
+            encrypted_spec("../../../Game/Content/", "plain.txt", &none_content, 0),
+        ];
+        let built = build(
+            &specs,
+            &Options {
+                encrypt_index: true,
+                encryption_key: Some(TEST_KEY),
+                ..Options::default()
+            },
+        );
+        // No key: the encrypted index refuses the whole run.
+        let (root, _out, result) = run_extract("extract-dec-nokey", &built.bytes);
+        assert!(result.is_err());
+        fs::remove_dir_all(&root).ok();
+        // With the key: plaintext lands, rows say decrypted.
+        let (root, out, result) =
+            run_extract_with("extract-dec-key", &built.bytes, Some(&test_key_hex()));
+        let value = result.unwrap();
+        let rows = extract_rows(&value).clone();
+        assert!(rows.iter().all(|row| row["status"] == "extracted"));
+        assert!(rows.iter().all(|row| row["decrypted"] == true));
+        assert_eq!(
+            fs::read(out.join("Game/Content/packed.txt")).unwrap(),
+            zlib_content
+        );
+        assert_eq!(
+            fs::read(out.join("Game/Content/plain.txt")).unwrap(),
+            none_content
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn decryption_extract_entries_only_pack_without_key_stays_refused() {
+        let specs = vec![encrypted_spec(
+            "../../../Game/Content/",
+            "secret.txt",
+            b"classified",
+            0,
+        )];
+        let built = build(
+            &specs,
+            &Options {
+                encryption_key: Some(TEST_KEY),
+                ..Options::default()
+            },
+        );
+        let (root, out, result) = run_extract("extract-dec-entries-nokey", &built.bytes);
+        let value = result.unwrap();
+        assert_eq!(extract_rows(&value)[0]["status"], "encrypted");
+        assert!(!out.join("Game/Content/secret.txt").exists());
         fs::remove_dir_all(&root).ok();
     }
 }
