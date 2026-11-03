@@ -259,6 +259,37 @@ pub const RPA_INDEX_BYTES_MAX: usize = 33_554_432;
 /// (readers SPEC §5.4).
 pub const RPA_PICKLE_NODES_MAX: usize = 2_000_000;
 
+/// Spec documents (`fathom-spec/1`) are read whole; the
+/// cap keeps a hostile or corrupt record from becoming an
+/// unbounded allocation.
+pub const SPEC_DOCUMENT_BYTES_MAX: u64 = 33_554_432;
+
+/// Evidence pointers one statement may carry. A claim cites
+/// a handful of records, never an archive.
+pub const SPEC_EVIDENCE_POINTERS_MAX: usize = 16;
+
+/// Statements in one spec document. A behaviour unit is
+/// stated in tens of claims; thousands means the unit is
+/// not a unit.
+pub const SPEC_STATEMENTS_MAX: usize = 4_096;
+
+/// Rows in one spec data table (aligned with the Cubism
+/// census bounds the tables derive from).
+pub const SPEC_TABLE_ROWS_MAX: usize = 100_000;
+
+/// Unknowns in one spec document. Each names its closing
+/// probe; the cap keeps the gap list a list, not a dump.
+pub const SPEC_UNKNOWNS_MAX: usize = 256;
+
+/// Violations one validation verdict itemises. Past the
+/// cap the spec is invalid either way; the verdict says
+/// what it found first.
+pub const SPEC_VIOLATIONS_MAX: usize = 256;
+
+/// Checks one spec diff reports (the corpus harness shape
+/// is ~113; the cap is headroom, not a target).
+pub const SPEC_CHECKS_MAX: usize = 4_096;
+
 /// Strings retained from one program inventory.
 pub const STRING_COUNT_MAX: usize = 5_000;
 
