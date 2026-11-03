@@ -558,10 +558,11 @@ fn encrypted_media_facts(root: &Path, files: &[WalkedFile]) -> Option<Value> {
                 if header_checked < 8 {
                     header_checked += 1;
                     let mut head = [0_u8; 5];
-                    if let Ok(mut handle) = File::open(root.join(&file.rel)) {
-                        if handle.read_exact(&mut head).is_ok() && &head == b"RPGMV" {
-                            header_valid += 1;
-                        }
+                    if let Ok(mut handle) = File::open(root.join(&file.rel))
+                        && handle.read_exact(&mut head).is_ok()
+                        && &head == b"RPGMV"
+                    {
+                        header_valid += 1;
                     }
                 }
             }
@@ -571,16 +572,14 @@ fn encrypted_media_facts(root: &Path, files: &[WalkedFile]) -> Option<Value> {
         if system.is_none()
             && file.name == "system.json"
             && file.rel.to_lowercase().contains("data/")
+            && let Ok(text) = std::fs::read_to_string(root.join(&file.rel))
+            && let Ok(parsed) = serde_json::from_str::<Value>(&text)
         {
-            if let Ok(text) = std::fs::read_to_string(root.join(&file.rel)) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
-                    system = Some(json!({
-                        "encryption_key_present": parsed.get("encryptionKey").is_some(),
-                        "has_encrypted_audio": parsed.get("hasEncryptedAudio").cloned().unwrap_or(Value::Null),
-                        "has_encrypted_images": parsed.get("hasEncryptedImages").cloned().unwrap_or(Value::Null),
-                    }));
-                }
-            }
+            system = Some(json!({
+                "encryption_key_present": parsed.get("encryptionKey").is_some(),
+                "has_encrypted_audio": parsed.get("hasEncryptedAudio").cloned().unwrap_or(Value::Null),
+                "has_encrypted_images": parsed.get("hasEncryptedImages").cloned().unwrap_or(Value::Null),
+            }));
         }
     }
     if audio == 0 && images == 0 && movies == 0 && system.is_none() {
@@ -789,10 +788,10 @@ pub fn census_game_tree(
     }
 
     let mut evidence_record = Evidence::new("census_game_tree", "game");
-    if metadata.is_file() {
-        if let Ok(subject) = subject_for_file_with_bound(&target, ARCHIVE_TARGET_BYTES_MAX) {
-            evidence_record.subject = Some(subject);
-        }
+    if metadata.is_file()
+        && let Ok(subject) = subject_for_file_with_bound(&target, ARCHIVE_TARGET_BYTES_MAX)
+    {
+        evidence_record.subject = Some(subject);
     }
     evidence_record.add_finding(Finding::new("game_census", Confidence::Observed, manifest));
     evidence_record.add_finding(Finding::new(
@@ -815,6 +814,9 @@ pub fn census_game_tree(
 
 #[cfg(test)]
 mod tests {
+    /// Files of one fingerprint test tree: (name, bytes).
+    type CaseFiles = Vec<(&'static str, Vec<u8>)>;
+
     use super::*;
     use fathom_core::config::Config;
     use fathom_core::error::FathomError;
@@ -1006,7 +1008,7 @@ mod tests {
 
     #[test]
     fn validation_unreal_kirikiri_gamemaker_electron() {
-        let cases: &[(&str, Vec<(&str, Vec<u8>)>, &str)] = &[
+        let cases: &[(&str, CaseFiles, &str)] = &[
             (
                 "unreal",
                 vec![
@@ -1191,7 +1193,7 @@ mod tests {
 
     #[test]
     fn validation_android_and_godot_and_rgss_layouts() {
-        let cases: &[(&str, Vec<(&str, Vec<u8>)>, &str)] = &[
+        let cases: &[(&str, CaseFiles, &str)] = &[
             (
                 "apk-unity",
                 vec![("extracted/lib/arm64-v8a/libil2cpp.so", b"x".to_vec())],
