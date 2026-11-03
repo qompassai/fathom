@@ -209,6 +209,16 @@ fn fingerprint(files: &[String], dirs: &[String]) -> (Option<Candidate>, Vec<Str
             variant: "unity",
         });
     }
+    if has_file(&|f| f.ends_with("libil2cpp.so") || f.ends_with("libunity.so")) {
+        candidates.push(Candidate {
+            engine: "unity",
+            evidence:
+                "Unity native library (libil2cpp.so/libunity.so) in an Android package layout"
+                    .to_string(),
+            strength: 90,
+            variant: "unity",
+        });
+    }
     if has_file(&|f| f.ends_with("gameassembly.dll")) {
         candidates.push(Candidate {
             engine: "unity",
@@ -263,8 +273,24 @@ fn fingerprint(files: &[String], dirs: &[String]) -> (Option<Candidate>, Vec<Str
             variant: "renpy",
         });
     }
+    if has_file(&|f| f.ends_with("x-android.json") || f.ends_with("android-presplash.jpg")) {
+        candidates.push(Candidate {
+            engine: "renpy",
+            evidence: "Ren'Py Android packaging markers (x-android.json / android-presplash.jpg)"
+                .to_string(),
+            strength: 80,
+            variant: "renpy-android",
+        });
+    }
     // RPG Maker: archive/data generations.
-    if has_file(&|f| f.ends_with(".rgss3a")) {
+    if has_file(&|f| f.ends_with(".rgssad") || f.ends_with(".rgss2a")) {
+        candidates.push(Candidate {
+            engine: "rpgmaker",
+            evidence: "RGSS archive (.rgssad/.rgss2a) present (XP/VX generation)".to_string(),
+            strength: 85,
+            variant: "rgss-archive",
+        });
+    } else if has_file(&|f| f.ends_with(".rgss3a")) {
         candidates.push(Candidate {
             engine: "rpgmaker",
             evidence: "Game.rgss3a archive present (VX Ace generation)".to_string(),
@@ -322,6 +348,31 @@ fn fingerprint(files: &[String], dirs: &[String]) -> (Option<Candidate>, Vec<Str
     }
     // Electron / NW.js runtimes (weakest: wrappers, not
     // game engines — they lose to any engine above).
+    // Godot: a .pck data pack, the .NET bindings, the
+    // Android native library, or a source project file.
+    if has_file(&|f| f.ends_with("godotsharp.dll") || f.ends_with("libgodot_android.so")) {
+        candidates.push(Candidate {
+            engine: "godot",
+            evidence: "Godot runtime binding (GodotSharp.dll / libgodot_android.so) present"
+                .to_string(),
+            strength: 90,
+            variant: "godot",
+        });
+    } else if has_file(&|f| f.ends_with(".pck")) {
+        candidates.push(Candidate {
+            engine: "godot",
+            evidence: "Godot .pck data pack present".to_string(),
+            strength: 80,
+            variant: "godot",
+        });
+    } else if has_file(&|f| f.ends_with("project.godot")) {
+        candidates.push(Candidate {
+            engine: "godot",
+            evidence: "project.godot source project present".to_string(),
+            strength: 85,
+            variant: "godot",
+        });
+    }
     if has_file(&|f| f.ends_with("app.asar")) {
         candidates.push(Candidate {
             engine: "electron",
@@ -341,12 +392,15 @@ fn fingerprint(files: &[String], dirs: &[String]) -> (Option<Candidate>, Vec<Str
 
     candidates.sort_by(|a, b| b.strength.cmp(&a.strength).then(a.engine.cmp(b.engine)));
     let evidence: Vec<String> = candidates.iter().map(|c| c.evidence.clone()).collect();
-    let mut also_detected: Vec<String> = candidates
-        .iter()
-        .skip(1)
-        .map(|c| c.engine.to_string())
-        .collect();
-    also_detected.dedup();
+    let winner_engine = candidates.first().map(|c| c.engine);
+    let mut also_detected: Vec<String> = Vec::new();
+    for candidate in &candidates {
+        if Some(candidate.engine) != winner_engine
+            && !also_detected.contains(&candidate.engine.to_string())
+        {
+            also_detected.push(candidate.engine.to_string());
+        }
+    }
     let winner = candidates.into_iter().next();
     (winner, evidence, also_detected)
 }
@@ -1067,6 +1121,64 @@ mod tests {
                 .unwrap()
                 .iter()
                 .any(|engine| engine == "renpy")
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_android_and_godot_and_rgss_layouts() {
+        let cases: &[(&str, Vec<(&str, Vec<u8>)>, &str)] = &[
+            (
+                "apk-unity",
+                vec![("extracted/lib/arm64-v8a/libil2cpp.so", b"x".to_vec())],
+                "unity",
+            ),
+            (
+                "apk-godot",
+                vec![("extracted/lib/arm64-v8a/libgodot_android.so", b"x".to_vec())],
+                "godot",
+            ),
+            ("godot-pck", vec![("game.pck", b"GDPC".to_vec())], "godot"),
+            (
+                "rgssad",
+                vec![("Game.rgssad", b"RGSSAD".to_vec())],
+                "rpgmaker",
+            ),
+            (
+                "renpy-apk",
+                vec![("extracted/assets/x-android.json", b"{}".to_vec())],
+                "renpy",
+            ),
+        ];
+        for (name, files, engine) in cases {
+            let refs: Vec<(&str, Vec<u8>)> = files.clone();
+            let (root, result) = run_game(name, &refs);
+            let value = result.unwrap();
+            assert_eq!(manifest_of(&value)["engine"]["name"], *engine, "{name}");
+            fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn adversarial_also_detected_excludes_winner_engine() {
+        // Two Unity rules fire (player binary + IL2CPP
+        // assembly): also_detected must not list unity.
+        let (root, result) = run_game(
+            "also-self",
+            &[
+                ("UnityPlayer.dll", b"x".to_vec()),
+                ("GameAssembly.dll", b"x".to_vec()),
+            ],
+        );
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        assert_eq!(manifest["engine"]["name"], "unity");
+        assert_eq!(
+            manifest["engine"]["also_detected"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
         );
         fs::remove_dir_all(&root).ok();
     }
