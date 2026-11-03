@@ -1,4 +1,9 @@
-//! Unreal Engine pak (version 11) reader (readers SPEC §4).
+//! Unreal Engine pak reader (versions 11 and 12;
+//! readers SPEC §4). Version 12's footer and index are
+//! layout-identical to version 11's — proven against
+//! the corpus's 7.9 GB version 12 title, whose index
+//! SHA-1 verifies and whose index parse lands exactly —
+//! so both versions share every code path below.
 //!
 //! Layout: the footer is the last 204 bytes (magic, version,
 //! index offset/size/SHA-1, five compression-method name
@@ -23,13 +28,13 @@
 use serde_json::{Value, json};
 use sha1::{Digest, Sha1};
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::{Confidence, Evidence, Finding, subject_for_file_with_bound};
-use fathom_core::limits::{ARCHIVE_TARGET_BYTES_MAX, PAK_ENTRIES_MAX};
+use fathom_core::limits::{GAME_EXTRACT_BYTES_MAX, PAK_ENTRIES_MAX, PAK_TARGET_BYTES_MAX};
 use fathom_core::paths;
 use fathom_core::proof;
 use fathom_core::registry::{Registry, require_str};
@@ -40,9 +45,11 @@ const FOOTER_BYTES: u64 = 204;
 const HASH_CHUNK_BYTES: usize = 65_536;
 /// Footer magic `E1 12 6F 5A`.
 const PAK_MAGIC: [u8; 4] = [0xe1, 0x12, 0x6f, 0x5a];
-/// The one pak version this reader implements (readers
-/// SPEC §4.8: other versions join scope only with a fixture).
-const PAK_VERSION_SUPPORTED: u32 = 11;
+/// The pak versions this reader implements (readers
+/// SPEC §4.8: other versions join scope only with a
+/// fixture; version 12 joined on the corpus title whose
+/// index verifies under the version 11 layout).
+const PAK_VERSIONS_SUPPORTED: [u32; 2] = [11, 12];
 /// Sanity bound on one data-area header's block count, so a
 /// lying header cannot size an unbounded read.
 const HEADER_BLOCKS_MAX: i32 = 1_000_000;
@@ -223,6 +230,7 @@ impl<'a> RegionCursor<'a> {
 /// The parsed 204-byte footer.
 struct Footer {
     index_offset: u64,
+    version: u32,
     index_sha1: [u8; 20],
     index_size: u64,
     /// The five compression-method name slots (indices 1–5);
@@ -242,9 +250,9 @@ fn parse_footer(bytes: &[u8]) -> Result<Footer, FathomError> {
         )));
     }
     let version = u32::from_le_bytes(footer[4..8].try_into().unwrap());
-    if version != PAK_VERSION_SUPPORTED {
+    if !PAK_VERSIONS_SUPPORTED.contains(&version) {
         return Err(unsupported(format!(
-            "pak version {version} is not implemented (supported: {PAK_VERSION_SUPPORTED})"
+            "pak version {version} is not implemented (supported: 11, 12)"
         )));
     }
     let index_offset = i64::from_le_bytes(footer[8..16].try_into().unwrap());
@@ -267,6 +275,7 @@ fn parse_footer(bytes: &[u8]) -> Result<Footer, FathomError> {
         index_sha1,
         index_size: index_size as u64,
         method_slots,
+        version,
     })
 }
 
@@ -617,7 +626,7 @@ pub fn inspect_unreal_pak(
     args: &Value,
 ) -> Result<Value, FathomError> {
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
-    let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
+    let subject = subject_for_file_with_bound(&path, PAK_TARGET_BYTES_MAX)?;
     let subject_sha256 = subject.sha256.clone();
     let file = File::open(&path).map_err(|error| {
         FathomError::new(
@@ -872,7 +881,7 @@ pub fn inspect_unreal_pak(
         "sha1_mismatch_entries": sha1_mismatch_count,
         "stored_bytes_total": stored_total,
         "uncompressed_bytes_total": uncompressed_total,
-        "version": PAK_VERSION_SUPPORTED,
+        "version": footer.version,
     });
     let doc_rows: Vec<Value> = rows
         .iter()
@@ -958,6 +967,426 @@ pub fn inspect_unreal_pak(
     evidence.coverage.total = total;
     evidence.coverage.exhaustive = examined == total && evidence.unknowns.is_empty();
     Ok(evidence.to_value())
+}
+
+/// Confine a pak entry path to a relative path under
+/// the output directory. Pak paths are mount-relative
+/// (`../../../Game/Content/...`): the leading parent
+/// segments are the mount convention and are stripped;
+/// any parent segment remaining after that refuses.
+fn safe_entry_relpath(entry: &str) -> Option<std::path::PathBuf> {
+    let mut rest = entry.replace('\\', "/");
+    loop {
+        if let Some(stripped) = rest.strip_prefix("../") {
+            rest = stripped.to_string();
+        } else if let Some(stripped) = rest.strip_prefix("./") {
+            rest = stripped.to_string();
+        } else if let Some(stripped) = rest.strip_prefix('/') {
+            rest = stripped.to_string();
+        } else {
+            break;
+        }
+    }
+    if rest.is_empty() {
+        return None;
+    }
+    let mut out = std::path::PathBuf::new();
+    for part in rest.split('/') {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            return None;
+        }
+        out.push(part);
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Write `rel` under `root` atomically (temp + rename),
+/// creating parent directories.
+fn write_atomic(root: &Path, rel: &Path, bytes: &[u8]) -> Result<(), FathomError> {
+    let destination = root.join(rel);
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| {
+            FathomError::new(
+                ErrorCode::ArtifactIntegrityMismatch,
+                format!("cannot create output directory: {error}"),
+            )
+        })?;
+    }
+    let temp = destination.with_extension("partial");
+    let mut file = File::create(&temp).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("cannot create output file: {error}"),
+        )
+    })?;
+    file.write_all(bytes).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("cannot write output file: {error}"),
+        )
+    })?;
+    std::fs::rename(&temp, &destination).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("cannot finalise output file: {error}"),
+        )
+    })?;
+    Ok(())
+}
+
+/// Produce one entry's payload into `out_file`, returning
+/// (payload bytes, payload SHA-256). Method None streams
+/// the stored bytes; Zlib inflates block by block with
+/// the census's own accounting. Callers have already
+/// SHA-1-verified the stored bytes against the data-area
+/// header, so what is written is verified content.
+fn write_payload(
+    reader: &mut RegionReader,
+    decoded: &DecodedEntry,
+    data_start: u64,
+    method_name: &str,
+    out_file: &mut File,
+) -> Result<(u64, String), FathomError> {
+    use flate2::read::ZlibDecoder;
+    use sha2::{Digest as _, Sha256};
+    let mut hasher = Sha256::new();
+    let mut produced: u64 = 0;
+    let mut sink = |chunk: &[u8],
+                    hasher: &mut Sha256,
+                    produced: &mut u64,
+                    out_file: &mut File|
+     -> Result<(), FathomError> {
+        out_file.write_all(chunk).map_err(|error| {
+            FathomError::new(
+                ErrorCode::ArtifactIntegrityMismatch,
+                format!("cannot write output file: {error}"),
+            )
+        })?;
+        hasher.update(chunk);
+        *produced += chunk.len() as u64;
+        Ok(())
+    };
+    if method_name == "None" {
+        let mut at = data_start;
+        let mut left = decoded.compressed_size;
+        while left > 0 {
+            let take = left.min(65_536);
+            let chunk = reader.read_range(at, take)?;
+            sink(&chunk, &mut hasher, &mut produced, out_file)?;
+            at += take;
+            left -= take;
+        }
+    } else {
+        // Zlib (the only other method this lane decodes).
+        let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
+            vec![decoded.compressed_size]
+        } else {
+            decoded.block_sizes.clone()
+        };
+        let mut at = data_start;
+        for size in &effective {
+            let stored = reader.read_range(at, *size)?;
+            at += size;
+            let decoder = ZlibDecoder::new(&stored[..]);
+            let mut block = Vec::new();
+            decoder
+                .take(decoded.uncompressed_size - produced + 1)
+                .read_to_end(&mut block)
+                .map_err(|_| mismatch("pak zlib block does not decompress"))?;
+            sink(&block, &mut hasher, &mut produced, out_file)?;
+            if produced > decoded.uncompressed_size {
+                break;
+            }
+        }
+    }
+    if produced != decoded.uncompressed_size {
+        return Err(mismatch(
+            "pak entry payload does not match its declared uncompressed size",
+        ));
+    }
+    Ok((produced, hex_bytes(&hasher.finalize())))
+}
+
+/// Extract a pak's verified payloads into an output
+/// directory with a manifest. The front half is the
+/// census's own: the index is trusted only after its
+/// SHA-1 verifies, paths are FDI-authoritative, every
+/// entry is cross-checked against its data-area header
+/// and SHA-1-verified before a byte is written.
+/// Encrypted entries are never decrypted; entries in
+/// compression methods this lane does not decode (for
+/// example Oodle) are recorded, never written — the
+/// stored bytes are not the content.
+pub fn extract_unreal_pak(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let output_dir =
+        paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
+    let subject = subject_for_file_with_bound(&path, PAK_TARGET_BYTES_MAX)?;
+    let subject_sha256 = subject.sha256.clone();
+    let file = File::open(&path).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot open target: {error}"),
+        )
+    })?;
+    let mut reader = RegionReader {
+        file,
+        len: subject.size_bytes,
+    };
+    if reader.len < FOOTER_BYTES {
+        return Err(unsupported("file too small to carry a pak footer"));
+    }
+    let footer_bytes = reader.read_range(reader.len - FOOTER_BYTES, FOOTER_BYTES)?;
+    let footer = parse_footer(&footer_bytes)?;
+    let index_bytes = reader.read_range(footer.index_offset, footer.index_size)?;
+    if hex_bytes(&Sha1::digest(&index_bytes)) != hex_bytes(&footer.index_sha1) {
+        return Err(mismatch(
+            "pak index SHA-1 does not match the footer; nothing is claimed from the index",
+        ));
+    }
+    let index = parse_index(&index_bytes)?;
+    let Some(fdi) = &index.fdi else {
+        return Err(unsupported(
+            "pak carries no full directory index; entry paths cannot be established",
+        ));
+    };
+    let fdi_bytes = reader.read_range(fdi.offset, fdi.size)?;
+    if hex_bytes(&Sha1::digest(&fdi_bytes)) != hex_bytes(&fdi.sha1) {
+        return Err(mismatch(
+            "pak full directory index SHA-1 does not match the index; paths are FDI-authoritative, so nothing is claimed",
+        ));
+    }
+    let (files, _directory_count) = parse_fdi(&fdi_bytes, &index)?;
+    std::fs::create_dir_all(&output_dir).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("cannot create output directory: {error}"),
+        )
+    })?;
+    let mut boundaries: Vec<u32> = files.iter().map(|(_, offset)| *offset).collect();
+    boundaries.sort_unstable();
+    boundaries.dedup();
+    let mut rows: Vec<Value> = Vec::with_capacity(files.len());
+    let mut counts: std::collections::BTreeMap<&str, u64> = Default::default();
+    let mut spent: u64 = 0;
+    for (path_entry, blob_offset) in &files {
+        let start = *blob_offset as usize;
+        let next = boundaries
+            .iter()
+            .copied()
+            .find(|bound| *bound > *blob_offset)
+            .map(|bound| bound as usize)
+            .unwrap_or(index.encoded_entries.len());
+        let segment = &index.encoded_entries[start..next];
+        let mut row = json!({
+            "bytes": 0,
+            "method": Value::Null,
+            "path": path_entry,
+            "sha256": Value::Null,
+            "status": "unread",
+            "stored_bytes": 0,
+            "uncompressed_size": 0,
+        });
+        let finish = |rows: &mut Vec<Value>,
+                      counts: &mut std::collections::BTreeMap<&str, u64>,
+                      row: Value,
+                      status: &'static str| {
+            *counts.entry(status).or_default() += 1;
+            let mut row = row;
+            row["status"] = json!(status);
+            rows.push(row);
+        };
+        let decoded = match decode_entry(segment) {
+            Ok(decoded) => decoded,
+            Err(_) => {
+                finish(&mut rows, &mut counts, row, "index_inconsistent");
+                continue;
+            }
+        };
+        row["stored_bytes"] = json!(decoded.compressed_size);
+        row["uncompressed_size"] = json!(decoded.uncompressed_size);
+        let method_name: Option<String> = if decoded.method_index == 0 {
+            Some("None".to_string())
+        } else if (decoded.method_index as usize) <= footer.method_slots.len() {
+            let name = &footer.method_slots[decoded.method_index as usize - 1];
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.clone())
+            }
+        } else {
+            None
+        };
+        row["method"] = json!(method_name);
+        if decoded.inconsistent || (decoded.method_index != 0 && method_name.is_none()) {
+            finish(&mut rows, &mut counts, row, "index_inconsistent");
+            continue;
+        }
+        let header = match parse_data_header(&mut reader, decoded.offset) {
+            Ok(header) => header,
+            Err(_) => {
+                finish(&mut rows, &mut counts, row, "header_mismatch");
+                continue;
+            }
+        };
+        if (header.offset != 0 && header.offset != decoded.offset)
+            || header.compressed_size != decoded.compressed_size
+            || header.uncompressed_size != decoded.uncompressed_size
+            || header.method_index != decoded.method_index
+        {
+            finish(&mut rows, &mut counts, row, "header_mismatch");
+            continue;
+        }
+        let data_start = decoded.offset + header.header_size;
+        if header.encrypted {
+            finish(&mut rows, &mut counts, row, "encrypted");
+            continue;
+        }
+        match reader.sha1_range(data_start, decoded.compressed_size) {
+            Ok(digest) if digest == header.sha1 => {}
+            Ok(_) => {
+                finish(&mut rows, &mut counts, row, "sha1_mismatch");
+                continue;
+            }
+            Err(_) => {
+                finish(&mut rows, &mut counts, row, "unreadable");
+                continue;
+            }
+        }
+        let method = method_name.as_deref().unwrap_or("");
+        if method != "None" && method != "Zlib" {
+            finish(&mut rows, &mut counts, row, "unsupported_compression");
+            continue;
+        }
+        let Some(rel) = safe_entry_relpath(path_entry) else {
+            finish(&mut rows, &mut counts, row, "refused_path");
+            continue;
+        };
+        if spent.saturating_add(decoded.uncompressed_size) > GAME_EXTRACT_BYTES_MAX {
+            finish(&mut rows, &mut counts, row, "skipped_budget");
+            continue;
+        }
+        let destination = output_dir.join(&rel);
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| {
+                FathomError::new(
+                    ErrorCode::ArtifactIntegrityMismatch,
+                    format!("cannot create output directory: {error}"),
+                )
+            })?;
+        }
+        let temp = destination.with_extension("partial");
+        let mut out_file = File::create(&temp).map_err(|error| {
+            FathomError::new(
+                ErrorCode::ArtifactIntegrityMismatch,
+                format!("cannot create output file: {error}"),
+            )
+        })?;
+        match write_payload(&mut reader, &decoded, data_start, method, &mut out_file) {
+            Ok((produced, sha256)) => {
+                drop(out_file);
+                std::fs::rename(&temp, &destination).map_err(|error| {
+                    FathomError::new(
+                        ErrorCode::ArtifactIntegrityMismatch,
+                        format!("cannot finalise output file: {error}"),
+                    )
+                })?;
+                spent += produced;
+                row["bytes"] = json!(produced);
+                row["sha256"] = json!(sha256);
+                finish(&mut rows, &mut counts, row, "extracted");
+            }
+            Err(_) => {
+                drop(out_file);
+                std::fs::remove_file(&temp).ok();
+                finish(&mut rows, &mut counts, row, "content_mismatch");
+            }
+        }
+    }
+    let totals = json!({
+        "content_mismatch": counts.get("content_mismatch").copied().unwrap_or(0),
+        "encrypted": counts.get("encrypted").copied().unwrap_or(0),
+        "extracted": counts.get("extracted").copied().unwrap_or(0),
+        "header_mismatch": counts.get("header_mismatch").copied().unwrap_or(0),
+        "index_inconsistent": counts.get("index_inconsistent").copied().unwrap_or(0),
+        "refused_path": counts.get("refused_path").copied().unwrap_or(0),
+        "sha1_mismatch": counts.get("sha1_mismatch").copied().unwrap_or(0),
+        "skipped_budget": counts.get("skipped_budget").copied().unwrap_or(0),
+        "unreadable": counts.get("unreadable").copied().unwrap_or(0),
+        "unsupported_compression": counts.get("unsupported_compression").copied().unwrap_or(0),
+    });
+    let manifest = json!({
+        "archive": path.display().to_string(),
+        "entries": rows,
+        "format": format!("Unreal pak version {}", footer.version),
+        "notes": [
+            "payloads are written only after the entry's stored bytes SHA-1-verify against its data-area header",
+            "encrypted entries are never decrypted and never written",
+            "compression methods other than None and Zlib are recorded as unsupported_compression, never written: stored bytes are not the content",
+            "entry paths are mount-relative; leading parent segments are stripped and any remaining parent segment refuses the entry",
+        ],
+        "totals": totals,
+        "version": footer.version,
+    });
+    let manifest_json = serde_json::to_string_pretty(&manifest).map_err(|error| {
+        FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("manifest serialisation failed: {error}"),
+        )
+    })?;
+    write_atomic(
+        &output_dir,
+        Path::new("manifest.json"),
+        manifest_json.as_bytes(),
+    )?;
+    let (digest, retention_note) =
+        match proof::retain_export(config, &subject_sha256, "pak_extract", &manifest) {
+            Ok(digest) => (Some(digest), None),
+            Err(error) => (None, Some(error.message)),
+        };
+    let mut evidence = Evidence::new("extract_unreal_pak", "unreal");
+    evidence.subject = Some(subject);
+    evidence.add_finding(Finding::new(
+        "unreal_pak_extract",
+        Confidence::Observed,
+        json!({
+            "bytes_written": spent,
+            "entries": files.len(),
+            "export_digest": digest,
+            "extracted": counts.get("extracted").copied().unwrap_or(0),
+            "output_dir": output_dir.display().to_string(),
+            "version": footer.version,
+        }),
+    ));
+    evidence.add_finding(Finding::new(
+        "entries",
+        Confidence::Observed,
+        json!({"entries": rows, "returned": rows_len(&rows), "total": rows_len(&rows)}),
+    ));
+    if let Some(note) = retention_note {
+        evidence.add_unknown(
+            "retention",
+            format!(
+                "extraction retention failed ({note}); the manifest stands on disk, but no proof can bind this run"
+            ),
+        );
+    }
+    Ok(evidence.to_value())
+}
+
+fn rows_len(rows: &[Value]) -> usize {
+    rows.len()
 }
 
 #[cfg(test)]
@@ -1587,6 +2016,135 @@ mod tests {
     fn adversarial_tiny_file_is_unsupported() {
         let (root, error) = run_err("pak-tiny", &[0_u8; 100]);
         assert_eq!(error.code, ErrorCode::UnsupportedTarget);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn run_extract(
+        test_name: &str,
+        bytes: &[u8],
+    ) -> (PathBuf, PathBuf, Result<Value, FathomError>) {
+        let root = std::env::temp_dir().join(format!(
+            "fathom-native-test-{}-{test_name}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("game.pak");
+        fs::write(&target, bytes).unwrap();
+        let out = root.join("out");
+        let config = Config::from_toml_str(&format!(
+            "state_dir = {:?}\ntarget_roots = [{:?}]\n",
+            root.join("state"),
+            root,
+        ))
+        .unwrap();
+        let args = json!({
+            "output_dir": out.display().to_string(),
+            "target": target.display().to_string(),
+        });
+        let result = extract_unreal_pak(&Registry::new(), &config, &args);
+        (root, out, result)
+    }
+
+    fn extract_rows(value: &Value) -> &Vec<Value> {
+        value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "entries")
+            .and_then(|finding| finding["facts"]["entries"].as_array())
+            .unwrap()
+    }
+
+    #[test]
+    fn validation_extract_stored_and_zlib() {
+        let stored_content = b"plain stored payload".to_vec();
+        let zlib_content = vec![b'z'; 5000];
+        let built = build(
+            &[
+                spec("../../../Game/Content/", "plain.txt", &stored_content, 0),
+                spec("../../../Game/Content/", "packed.txt", &zlib_content, 1),
+            ],
+            &Options::default(),
+        );
+        let (root, out, result) = run_extract("extract-basic", &built.bytes);
+        let value = result.unwrap();
+        let rows = extract_rows(&value).clone();
+        assert!(rows.iter().all(|row| row["status"] == "extracted"));
+        assert_eq!(
+            fs::read(out.join("Game/Content/plain.txt")).unwrap(),
+            stored_content
+        );
+        assert_eq!(
+            fs::read(out.join("Game/Content/packed.txt")).unwrap(),
+            zlib_content
+        );
+        assert!(out.join("manifest.json").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_v12_census_accepted() {
+        let built = build(
+            &[spec("../../../Game/Content/", "a.txt", b"data", 0)],
+            &Options {
+                version: 12,
+                ..Options::default()
+            },
+        );
+        let (root, value) = run_inspect("v12", &built.bytes);
+        let facts = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|finding| finding["kind"] == "unreal_pak")
+            .map(|finding| &finding["facts"])
+            .unwrap();
+        assert_eq!(facts["version"], 12);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_extract_encrypted_and_oodle_not_written() {
+        let mut encrypted_spec = spec("../../../Game/Content/", "secret.txt", b"classified", 0);
+        encrypted_spec.encrypted = true;
+        let built = build(&[encrypted_spec], &Options::default());
+        let (root, out, result) = run_extract("extract-encrypted", &built.bytes);
+        let value = result.unwrap();
+        assert_eq!(extract_rows(&value)[0]["status"], "encrypted");
+        assert!(!out.join("Game/Content/secret.txt").exists());
+        fs::remove_dir_all(&root).ok();
+
+        // Oodle: patch the footer's Zlib slot name.
+        let built = build(
+            &[spec(
+                "../../../Game/Content/",
+                "oo.txt",
+                b"oodle payload",
+                1,
+            )],
+            &Options::default(),
+        );
+        let mut bytes = built.bytes.clone();
+        let footer_at = bytes.len() - 204;
+        bytes[footer_at + 44..footer_at + 49].copy_from_slice(b"Oodle");
+        let (root, out, result) = run_extract("extract-oodle", &bytes);
+        let value = result.unwrap();
+        assert_eq!(extract_rows(&value)[0]["status"], "unsupported_compression");
+        assert!(!out.join("Game/Content/oo.txt").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_extract_inner_traversal_refused() {
+        let built = build(
+            &[spec("../../../Game/Content/", "../evil.txt", b"pwned", 0)],
+            &Options::default(),
+        );
+        let (root, out, result) = run_extract("extract-traversal", &built.bytes);
+        let value = result.unwrap();
+        assert_eq!(extract_rows(&value)[0]["status"], "refused_path");
+        assert!(!root.join("evil.txt").exists());
+        assert!(!out.join("Game/evil.txt").exists());
         fs::remove_dir_all(&root).ok();
     }
 }
