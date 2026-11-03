@@ -21,9 +21,10 @@
 //! re-run and filed (retroactive-fixture closure).
 
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
@@ -32,7 +33,8 @@ use fathom_core::evidence::{
 };
 use fathom_core::limits::{
     ARCHIVE_TARGET_BYTES_MAX, TEXTURE_DIMENSION_MAX, UNITY_BLOCKS_INFO_BYTES_MAX,
-    UNITY_EXTRACT_BYTES_MAX, UNITY_EXTRACT_CARVES_MAX, UNITY_NODES_MAX, UNITY_OBJECTS_MAX,
+    UNITY_EXTERNALS_MAX, UNITY_EXTRACT_BYTES_MAX, UNITY_EXTRACT_CARVES_MAX, UNITY_MB_FILES_MAX,
+    UNITY_MB_OBJECTS_MAX, UNITY_MB_WALK_DEPTH_MAX, UNITY_NODES_MAX, UNITY_OBJECTS_MAX,
     UNITY_TYPES_MAX,
 };
 use fathom_core::paths;
@@ -459,8 +461,22 @@ fn skip_type_tree(cursor: &mut SfCursor, version: u32) -> Result<(), FathomError
 }
 
 /// Parse a SerializedFile's metadata census from its full
-/// uncompressed bytes.
+/// uncompressed bytes, retaining object rows up to the
+/// shared record cap.
 fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
+    parse_serialized_file_capped(bytes, UNITY_OBJECTS_MAX)
+}
+
+/// As `parse_serialized_file`, with the retained payload
+/// rows bounded by `payload_cap` instead of the shared
+/// record cap. The JSON object rows keep the shared cap
+/// either way (they are record bulk, not census data), and
+/// `objects_truncated` reports the payload bound, which is
+/// the one a census reads.
+fn parse_serialized_file_capped(
+    bytes: &[u8],
+    payload_cap: usize,
+) -> Result<SfSummary, FathomError> {
     if bytes.len() < 16 {
         return Err(truncated("serialized file is shorter than its header"));
     }
@@ -626,7 +642,7 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
                     .and_then(|value| i16::try_from(value).ok())
             })
             .unwrap_or(-1);
-        if (index as usize) < UNITY_OBJECTS_MAX {
+        if (index as usize) < payload_cap {
             payloads.push(SfPayload {
                 byte_size,
                 byte_start,
@@ -635,6 +651,10 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
                 script_type_index,
                 type_index,
             });
+        } else {
+            objects_truncated = true;
+        }
+        if (index as usize) < UNITY_OBJECTS_MAX {
             objects.push(json!({
                 "byte_size": byte_size,
                 "byte_start": byte_start,
@@ -642,8 +662,6 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
                 "path_id": path_id,
                 "type_index": type_index,
             }));
-        } else {
-            objects_truncated = true;
         }
     }
     let objects_by_class = json!(objects_by_class_map);
@@ -1039,6 +1057,916 @@ pub fn inspect_unity_bundle(
     evidence.coverage.examined = examined;
     evidence.coverage.total = total;
     evidence.coverage.exhaustive = examined == total && evidence.unknowns.is_empty();
+    Ok(evidence.to_value())
+}
+
+// ---------------------------------------------------------------------
+// MonoBehaviour census (BQ-2): typetree-independent.
+// ---------------------------------------------------------------------
+
+/// Unity class ID of MonoScript, the fixed-layout identity
+/// record a MonoBehaviour's `m_Script` pointer names.
+const CLASS_MONO_SCRIPT: i64 = 115;
+
+/// Per-object anomaly rows retained in the census record;
+/// the anomaly counts themselves stay exact past the cap.
+const MB_ANOMALIES_RETAINED_MAX: usize = 100;
+
+/// A MonoScript's identity, parsed from its fixed-layout
+/// payload: the script class a MonoBehaviour belongs to.
+/// Field order is the census's sort order (assembly,
+/// namespace, class), matching the record's grouping.
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ScriptIdentity {
+    assembly: String,
+    namespace: String,
+    class: String,
+}
+
+/// Read one 4-aligned, length-prefixed string from a payload
+/// cursor positioned at the payload's start. Payload strings
+/// are strict UTF-8; the error is a plain message because a
+/// bad payload is an anomaly in the caller's census, not a
+/// failure of the census itself.
+fn read_payload_string(cursor: &mut SfCursor) -> Result<String, String> {
+    let len = cursor.read_i32().map_err(|error| error.message)?;
+    if len < 0 || len as usize > cursor.bytes.len() {
+        return Err(format!("payload string declares {len} bytes"));
+    }
+    let raw = cursor
+        .read_bytes(len as usize)
+        .map_err(|error| error.message)?;
+    let text =
+        String::from_utf8(raw.to_vec()).map_err(|_| "payload string is not UTF-8".to_string())?;
+    cursor.align_stream();
+    Ok(text)
+}
+
+/// Parse a MonoScript payload (fixed layout, verified
+/// against the corpus): m_Name, m_ExecutionOrder,
+/// m_PropertiesHash (16 bytes), m_ClassName, m_Namespace,
+/// m_AssemblyName. Trailing bytes (m_IsEditorScript) are
+/// not part of the identity and are not read.
+fn parse_mono_script(slice: &[u8], little: bool) -> Result<ScriptIdentity, String> {
+    let mut cursor = SfCursor {
+        bytes: slice,
+        little,
+        position: 0,
+    };
+    let _name = read_payload_string(&mut cursor)?;
+    cursor.read_i32().map_err(|error| error.message)?;
+    cursor.read_bytes(16).map_err(|error| error.message)?;
+    let class = read_payload_string(&mut cursor)?;
+    let namespace = read_payload_string(&mut cursor)?;
+    let assembly = read_payload_string(&mut cursor)?;
+    Ok(ScriptIdentity {
+        assembly,
+        namespace,
+        class,
+    })
+}
+
+/// The fixed-layout head of one MonoBehaviour payload.
+/// m_Name is parsed (it validates the header's shape) but
+/// not retained: the census groups by script class.
+struct MbHeader {
+    payload_bytes: usize,
+    script_file: i32,
+    script_path: i64,
+}
+
+/// Parse a MonoBehaviour header (fixed layout):
+/// m_GameObject (PPtr), m_Enabled, m_Script (PPtr), m_Name;
+/// everything after the name is script field data, counted
+/// in bytes and never expanded — the per-script type trees
+/// that would describe it are not present in shipped builds
+/// (every type row in the corpus carries zero tree nodes).
+fn parse_mb_header(slice: &[u8], little: bool) -> Result<MbHeader, String> {
+    if slice.len() < 32 {
+        return Err(format!(
+            "payload is {} bytes, under the 32-byte header",
+            slice.len()
+        ));
+    }
+    let mut cursor = SfCursor {
+        bytes: slice,
+        little,
+        position: 0,
+    };
+    cursor.read_i32().map_err(|error| error.message)?; // m_GameObject file index
+    cursor.read_i64().map_err(|error| error.message)?; // m_GameObject path id
+    let enabled = cursor.read_u8().map_err(|error| error.message)?;
+    if enabled > 1 {
+        return Err(format!("m_Enabled is {enabled}, not 0 or 1"));
+    }
+    cursor.position = 16;
+    let script_file = cursor.read_i32().map_err(|error| error.message)?;
+    let script_path = cursor.read_i64().map_err(|error| error.message)?;
+    cursor.position = 28;
+    let _name = read_payload_string(&mut cursor)?;
+    Ok(MbHeader {
+        payload_bytes: slice.len() - cursor.position,
+        script_file,
+        script_path,
+    })
+}
+
+/// The payload bytes of one object row, bounds-checked
+/// against the file's data area.
+fn payload_slice<'a>(
+    bytes: &'a [u8],
+    summary: &SfSummary,
+    payload: &SfPayload,
+) -> Option<&'a [u8]> {
+    let start = summary.data_offset.checked_add(payload.byte_start)?;
+    let end = start.checked_add(u64::from(payload.byte_size))?;
+    bytes.get(usize::try_from(start).ok()?..usize::try_from(end).ok()?)
+}
+
+/// Second-pass walk of one SerializedFile's metadata to its
+/// externals table — the file names a PPtr file index
+/// resolves through. `parse_serialized_file` stops after the
+/// object table by design (its census never needed
+/// externals); this walk re-covers the same ground with the
+/// same cursor discipline and fails closed on any byte-layout
+/// disagreement. Returns external file base names in table
+/// order (index + 1 is the PPtr file index).
+fn parse_sf_externals(bytes: &[u8]) -> Result<Vec<String>, FathomError> {
+    if bytes.len() < 20 {
+        return Err(truncated("serialized file is shorter than its header"));
+    }
+    let be_u32 = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+    let version = be_u32(8);
+    if !(SF_VERSION_MIN..=SF_VERSION_MAX).contains(&version) {
+        return Err(unsupported(format!(
+            "serialized file version {version} is not implemented (supported: {SF_VERSION_MIN}..={SF_VERSION_MAX})"
+        )));
+    }
+    let metadata_start = if version >= 22 {
+        if bytes.len() < 48 {
+            return Err(truncated(
+                "serialized file is shorter than its version-22 header",
+            ));
+        }
+        48usize
+    } else {
+        20usize
+    };
+    let little = bytes[16] == 0;
+    let mut cursor = SfCursor {
+        bytes,
+        little,
+        position: metadata_start,
+    };
+    if version >= 7 {
+        cursor.read_cstring()?;
+    }
+    if version >= 8 {
+        cursor.read_u32()?; // script compatibility (skipped)
+    }
+    let enable_type_tree = if version >= 10 {
+        cursor.read_u8()? != 0
+    } else {
+        true
+    };
+    let type_count = cursor.read_u32()?;
+    if type_count as usize > UNITY_TYPES_MAX {
+        return Err(resource(format!(
+            "serialized file declares {type_count} types, over UNITY_TYPES_MAX ({UNITY_TYPES_MAX})"
+        )));
+    }
+    for _ in 0..type_count {
+        let class_id = cursor.read_i32()?;
+        if version >= 16 {
+            cursor.read_u8()?; // is_stripped (skipped)
+            cursor.read_i16()?; // script type index (skipped)
+        }
+        if version >= 13 {
+            if (version >= 16 && class_id == 114) || (version < 16 && class_id < 0) {
+                cursor.read_bytes(16)?; // script id
+            }
+            cursor.read_bytes(16)?; // type hash
+        }
+        if enable_type_tree {
+            skip_type_tree(&mut cursor, version)?;
+            if version >= 21 {
+                let dependency_count = cursor.read_i32()?;
+                if dependency_count < 0 {
+                    return Err(mismatch(
+                        "serialized type declares a negative dependency count",
+                    ));
+                }
+                let dependency_bytes = (dependency_count as usize)
+                    .checked_mul(4)
+                    .ok_or_else(|| resource("serialized type dependency list overflows"))?;
+                cursor.read_bytes(dependency_bytes)?;
+            }
+        }
+    }
+    // Object rows are skipped, never retained: the walk only
+    // needs their byte widths, which the layout fixes.
+    let object_count = cursor.read_u32()?;
+    for _ in 0..object_count {
+        if version >= 14 {
+            cursor.align_stream();
+        }
+        if version >= 14 {
+            cursor.read_i64()?;
+        } else {
+            cursor.read_i32()?;
+        }
+        if version >= 22 {
+            cursor.read_u64()?;
+        } else {
+            cursor.read_u32()?;
+        }
+        cursor.read_u32()?; // byte size
+        cursor.read_i32()?; // type index
+        if version < 16 {
+            cursor.read_u16()?; // class id
+        }
+        if version < 11 {
+            cursor.read_u16()?; // is_destroyed
+        }
+        if (11..17).contains(&version) {
+            cursor.read_i16()?; // row script type index
+        }
+        if version == 15 || version == 16 {
+            cursor.read_u8()?; // is_stripped
+        }
+    }
+    if version >= 11 {
+        let script_count = cursor.read_i32()?;
+        if script_count < 0 || script_count as usize > UNITY_EXTERNALS_MAX {
+            return Err(resource(format!(
+                "serialized file declares {script_count} script-type rows, over UNITY_EXTERNALS_MAX ({UNITY_EXTERNALS_MAX})"
+            )));
+        }
+        for _ in 0..script_count {
+            cursor.read_i32()?; // local serialized file index
+            if version < 14 {
+                cursor.read_i32()?;
+            } else {
+                cursor.align_stream();
+                cursor.read_i64()?;
+            }
+        }
+    }
+    let external_count = cursor.read_i32()?;
+    if external_count < 0 || external_count as usize > UNITY_EXTERNALS_MAX {
+        return Err(resource(format!(
+            "serialized file declares {external_count} externals, over UNITY_EXTERNALS_MAX ({UNITY_EXTERNALS_MAX})"
+        )));
+    }
+    let mut names = Vec::with_capacity(external_count as usize);
+    for _ in 0..external_count {
+        if version >= 6 {
+            cursor.read_cstring()?; // temp_empty (skipped)
+        }
+        if version >= 5 {
+            cursor.read_bytes(16)?; // guid
+            cursor.read_i32()?; // type
+        }
+        let path = cursor.read_cstring()?;
+        names.push(path.rsplit(['/', '\\']).next().unwrap_or(&path).to_string());
+    }
+    Ok(names)
+}
+
+/// Loose SerializedFile names in a Unity data directory: the
+/// engine's own file vocabulary (bundle nodes are discovered
+/// by signature instead and need no name rule).
+fn is_serialized_name(name: &str) -> bool {
+    name == "globalgamemanagers"
+        || name == "globalgamemanagers.assets"
+        || name == "resources.assets"
+        || name == "unity default resources"
+        || name == "unity_builtin_extra"
+        || name.ends_with(".assets")
+        || (name.len() > 5
+            && name.starts_with("level")
+            && name[5..].chars().all(|c| c.is_ascii_digit()))
+}
+
+/// One census source: a SerializedFile whose bytes live in a
+/// loose file or in one node of a UnityFS bundle.
+struct MbSource {
+    /// Registry key: the file base name scripts resolve by.
+    key: String,
+    /// Human-facing source name (relative path, or
+    /// `bundle!node` for bundle members).
+    display: String,
+    container: &'static str,
+    load: MbSourceLoad,
+}
+
+enum MbSourceLoad {
+    Loose(PathBuf),
+    /// Bundle members are identified by the source's
+    /// display name in the run's decoded-node cache.
+    BundleNode,
+}
+
+/// Walk a data directory (bounded) and collect candidate
+/// files: UnityFS bundles by signature, loose SerializedFiles
+/// by name. Returns (candidates, capped, unreadable).
+fn walk_mb_candidates(root: &Path) -> (Vec<PathBuf>, bool, usize) {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    let mut capped = false;
+    let mut unreadable = 0usize;
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(_) => {
+                unreadable += 1;
+                continue;
+            }
+        };
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok().map(|e| e.path()))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let Ok(file_type) = std::fs::symlink_metadata(&path).map(|m| m.file_type()) else {
+                unreadable += 1;
+                continue;
+            };
+            if file_type.is_dir() {
+                if depth < UNITY_MB_WALK_DEPTH_MAX {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if !file_type.is_file() {
+                continue;
+            }
+            if candidates.len() >= UNITY_MB_FILES_MAX {
+                capped = true;
+                continue;
+            }
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            let is_bundle = std::fs::File::open(&path)
+                .and_then(|mut f| {
+                    let mut sig = [0u8; 8];
+                    f.read_exact(&mut sig).map(|()| sig)
+                })
+                .map(|sig| &sig == b"UnityFS\0")
+                .unwrap_or(false);
+            if is_bundle || is_serialized_name(&name) {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    (candidates, capped, unreadable)
+}
+
+/// Decode one UnityFS bundle's serialized nodes to
+/// (node path, bytes) pairs, mirroring the census path in
+/// `inspect_unity_bundle`: LZMA blocks info and undecodable
+/// blocks are named errors, never worked around.
+fn bundle_serialized_nodes(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let file_len = std::fs::metadata(path)
+        .map_err(|error| format!("cannot stat bundle: {error}"))?
+        .len();
+    if file_len > ARCHIVE_TARGET_BYTES_MAX {
+        return Err(format!(
+            "bundle declares {file_len} bytes, over ARCHIVE_TARGET_BYTES_MAX ({ARCHIVE_TARGET_BYTES_MAX})"
+        ));
+    }
+    let file = File::open(path).map_err(|error| format!("cannot open bundle: {error}"))?;
+    let mut reader = RegionReader {
+        file,
+        len: file_len,
+    };
+    let prefix = reader
+        .read_range(0, file_len.min(HEADER_PREFIX_BYTES))
+        .map_err(|error| error.message)?;
+    if !prefix.starts_with(b"UnityFS\0") {
+        return Err("file has no UnityFS signature".to_string());
+    }
+    let header = parse_bundle_header(&prefix).map_err(|error| error.message)?;
+    let compression = header.flags & 0x3F;
+    if compression == 1 {
+        return Err("blocks info is LZMA-compressed and is not decoded by this reader".to_string());
+    }
+    if !matches!(compression, 0 | 2 | 3) {
+        return Err(format!(
+            "blocks-info compression code {compression} is not implemented"
+        ));
+    }
+    if header.uncompressed_blocks_info_size as usize > UNITY_BLOCKS_INFO_BYTES_MAX {
+        return Err(format!(
+            "blocks info declares {} uncompressed bytes, over UNITY_BLOCKS_INFO_BYTES_MAX ({UNITY_BLOCKS_INFO_BYTES_MAX})",
+            header.uncompressed_blocks_info_size
+        ));
+    }
+    let blocks_info_offset = if header.blocks_info_at_end {
+        if file_len < u64::from(header.compressed_blocks_info_size) {
+            return Err("file is smaller than the blocks-info region at its end".to_string());
+        }
+        file_len - u64::from(header.compressed_blocks_info_size)
+    } else {
+        header.data_start
+    };
+    let stored_info = reader
+        .read_range(
+            blocks_info_offset,
+            u64::from(header.compressed_blocks_info_size),
+        )
+        .map_err(|error| error.message)?;
+    let info_bytes = match compression {
+        0 => stored_info,
+        _ => {
+            lz4_flex::block::decompress(&stored_info, header.uncompressed_blocks_info_size as usize)
+                .map_err(|error| format!("blocks info does not decompress: {error}"))?
+        }
+    };
+    if info_bytes.len() != header.uncompressed_blocks_info_size as usize {
+        return Err(
+            "blocks info decompressed size disagrees with the header declaration".to_string(),
+        );
+    }
+    let info = parse_blocks_info(&info_bytes).map_err(|error| error.message)?;
+    if info.nodes.len() > UNITY_NODES_MAX {
+        return Err(format!(
+            "bundle declares {} nodes, over UNITY_NODES_MAX ({UNITY_NODES_MAX})",
+            info.nodes.len()
+        ));
+    }
+    let blocks_file_start = if header.blocks_info_at_end {
+        header.data_start
+    } else {
+        blocks_info_offset + u64::from(header.compressed_blocks_info_size)
+    };
+    let mut out = Vec::new();
+    for node in &info.nodes {
+        if node.flags & 4 == 0 {
+            continue;
+        }
+        let bytes = node_bytes(&mut reader, blocks_file_start, &info, node)?;
+        out.push((node.path.clone(), bytes));
+    }
+    Ok(out)
+}
+
+/// Per-source parse retained between the census's two
+/// passes (script registry first, behaviours second), so a
+/// MonoBehaviour can resolve a script declared in a file
+/// the walk meets later.
+struct MbParsed {
+    display: String,
+    key: String,
+    container: &'static str,
+    externals: Vec<String>,
+    /// Loose-file path for a standalone SerializedFile;
+    /// bundle members re-read from the run's node cache.
+    loose_path: Option<PathBuf>,
+    summary: SfSummary,
+}
+
+/// Accumulates the census across sources.
+#[derive(Default)]
+struct MbAccum {
+    anomalies: Vec<String>,
+    anomaly_count: u64,
+    counts: BTreeMap<ScriptIdentity, u64>,
+    null_script_references: u64,
+    script_anomalies: Vec<String>,
+    script_anomaly_count: u64,
+    unresolved: BTreeMap<String, u64>,
+}
+
+impl MbAccum {
+    fn anomaly(&mut self, message: String) {
+        self.anomaly_count += 1;
+        if self.anomalies.len() < MB_ANOMALIES_RETAINED_MAX {
+            self.anomalies.push(message);
+        }
+    }
+
+    fn script_anomaly(&mut self, message: String) {
+        self.script_anomaly_count += 1;
+        if self.script_anomalies.len() < MB_ANOMALIES_RETAINED_MAX {
+            self.script_anomalies.push(message);
+        }
+    }
+}
+
+/// Census the MonoBehaviours of one Unity data directory
+/// without consulting any type tree: fixed-layout headers
+/// and MonoScript identities from raw payloads, script
+/// references resolved through each file's externals table.
+#[allow(clippy::too_many_lines)]
+pub fn census_unity_monobehaviours(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let target_raw = require_str(args, "target")?;
+    let target = paths::validate_target(config, Path::new(target_raw))?;
+    let metadata = std::fs::metadata(&target).map_err(|error| {
+        FathomError::new(
+            ErrorCode::TargetUnavailable,
+            format!("cannot stat target {}: {error}", target.display()),
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(FathomError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "census_unity_monobehaviours target {} is not a directory",
+                target.display()
+            ),
+        ));
+    }
+    let target_name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let (candidates, walk_capped, walk_unreadable) = walk_mb_candidates(&target);
+    // Expand candidates into sources (loose files + bundle
+    // nodes). Bundle bytes are decoded once and kept: the
+    // census walks its sources twice.
+    let mut sources: Vec<MbSource> = Vec::new();
+    let mut bundle_cache: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut failed: Vec<Value> = Vec::new();
+    for candidate in &candidates {
+        let rel = candidate
+            .strip_prefix(&target)
+            .unwrap_or(candidate)
+            .display()
+            .to_string();
+        let name = candidate
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let is_bundle = std::fs::File::open(candidate)
+            .and_then(|mut f| {
+                let mut sig = [0u8; 8];
+                f.read_exact(&mut sig).map(|()| sig)
+            })
+            .map(|sig| &sig == b"UnityFS\0")
+            .unwrap_or(false);
+        if is_bundle {
+            match bundle_serialized_nodes(candidate) {
+                Ok(nodes) => {
+                    for (node_path, bytes) in nodes {
+                        let display = format!("{rel}!{node_path}");
+                        let key = node_path
+                            .rsplit(['/', '\\'])
+                            .next()
+                            .unwrap_or(&node_path)
+                            .to_string();
+                        bundle_cache.insert(display.clone(), bytes);
+                        sources.push(MbSource {
+                            key,
+                            display,
+                            container: "bundle_node",
+                            load: MbSourceLoad::BundleNode,
+                        });
+                    }
+                }
+                Err(reason) => failed.push(json!({"error": reason, "source": rel})),
+            }
+        } else {
+            sources.push(MbSource {
+                key: name,
+                display: rel,
+                container: "serialized_file",
+                load: MbSourceLoad::Loose(candidate.clone()),
+            });
+        }
+    }
+    if sources.is_empty() {
+        return Err(FathomError::new(
+            ErrorCode::InvalidRequest,
+            format!(
+                "no readable SerializedFiles under {} ({} candidate file(s), {} failed)",
+                target.display(),
+                candidates.len(),
+                failed.len()
+            ),
+        ));
+    }
+    let load_bytes = |source: &MbSource,
+                      bundle_cache: &BTreeMap<String, Vec<u8>>|
+     -> Result<Vec<u8>, String> {
+        match &source.load {
+            MbSourceLoad::Loose(path) => {
+                let size = std::fs::metadata(path)
+                    .map_err(|error| format!("cannot stat file: {error}"))?
+                    .len();
+                if size > ARCHIVE_TARGET_BYTES_MAX {
+                    return Err(format!(
+                        "file declares {size} bytes, over ARCHIVE_TARGET_BYTES_MAX ({ARCHIVE_TARGET_BYTES_MAX})"
+                    ));
+                }
+                std::fs::read(path).map_err(|error| format!("cannot read file: {error}"))
+            }
+            MbSourceLoad::BundleNode => bundle_cache
+                .get(&source.display)
+                .cloned()
+                .ok_or_else(|| "bundle node bytes were not retained".to_string()),
+        }
+    };
+    // Pass 1: parse every source and build the script
+    // registry — (file base name, path id) -> identity.
+    let mut accum = MbAccum::default();
+    let mut parsed: Vec<MbParsed> = Vec::new();
+    let mut registry: BTreeMap<(String, i64), ScriptIdentity> = BTreeMap::new();
+    let mut monoscripts_total: u64 = 0;
+    for source in &sources {
+        let bytes = match load_bytes(source, &bundle_cache) {
+            Ok(bytes) => bytes,
+            Err(reason) => {
+                failed.push(json!({"error": reason, "source": source.display}));
+                continue;
+            }
+        };
+        let summary = match parse_serialized_file_capped(&bytes, UNITY_MB_OBJECTS_MAX) {
+            Ok(summary) => summary,
+            Err(error) => {
+                failed.push(json!({"error": error.message, "source": source.display}));
+                continue;
+            }
+        };
+        let externals = match parse_sf_externals(&bytes) {
+            Ok(externals) => externals,
+            Err(error) => {
+                failed.push(json!({"error": error.message, "source": source.display}));
+                continue;
+            }
+        };
+        for payload in &summary.payloads {
+            if payload.class_id != CLASS_MONO_SCRIPT {
+                continue;
+            }
+            monoscripts_total += 1;
+            let Some(slice) = payload_slice(&bytes, &summary, payload) else {
+                accum.script_anomaly(format!(
+                    "{}: MonoScript {} payload lies outside the file bytes",
+                    source.display, payload.path_id
+                ));
+                continue;
+            };
+            match parse_mono_script(slice, summary.little) {
+                Ok(identity) => {
+                    let reg_key = (source.key.clone(), payload.path_id);
+                    if let Some(existing) = registry.get(&reg_key) {
+                        if *existing != identity {
+                            accum.script_anomaly(format!(
+                                "{}: MonoScript {} redeclared with a different identity; the first stands",
+                                source.display, payload.path_id
+                            ));
+                        }
+                    } else {
+                        registry.insert(reg_key, identity);
+                    }
+                }
+                Err(reason) => accum.script_anomaly(format!(
+                    "{}: MonoScript {} does not parse ({reason})",
+                    source.display, payload.path_id
+                )),
+            }
+        }
+        parsed.push(MbParsed {
+            display: source.display.clone(),
+            key: source.key.clone(),
+            container: source.container,
+            externals,
+            loose_path: match &source.load {
+                MbSourceLoad::Loose(path) => Some(path.clone()),
+                MbSourceLoad::BundleNode => None,
+            },
+            summary,
+        });
+    }
+    // Pass 2: census the MonoBehaviours of every parsed
+    // source against the completed registry.
+    let mut file_rows: Vec<Value> = Vec::new();
+    let mut monobehaviours_total: u64 = 0;
+    let mut payload_bytes_total: u64 = 0;
+    let mut truncated_files: Vec<String> = Vec::new();
+    for source in &parsed {
+        let bytes = match &source.loose_path {
+            Some(path) => match std::fs::read(path) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            },
+            None => match bundle_cache.get(&source.display) {
+                Some(bytes) => bytes.clone(),
+                None => continue,
+            },
+        };
+        let mut file_behaviours: u64 = 0;
+        let mut file_payload_bytes: u64 = 0;
+        for payload in &source.summary.payloads {
+            if payload.class_id != CLASS_MONO_BEHAVIOUR {
+                continue;
+            }
+            file_behaviours += 1;
+            let Some(slice) = payload_slice(&bytes, &source.summary, payload) else {
+                accum.anomaly(format!(
+                    "{}: MonoBehaviour {} payload lies outside the file bytes",
+                    source.display, payload.path_id
+                ));
+                continue;
+            };
+            let header = match parse_mb_header(slice, source.summary.little) {
+                Ok(header) => header,
+                Err(reason) => {
+                    accum.anomaly(format!(
+                        "{}: MonoBehaviour {} header does not parse ({reason})",
+                        source.display, payload.path_id
+                    ));
+                    continue;
+                }
+            };
+            file_payload_bytes += header.payload_bytes as u64;
+            if header.script_path == 0 {
+                accum.null_script_references += 1;
+                continue;
+            }
+            let target_key = if header.script_file == 0 {
+                Some(source.key.clone())
+            } else if header.script_file > 0 {
+                source
+                    .externals
+                    .get((header.script_file - 1) as usize)
+                    .cloned()
+            } else {
+                None
+            };
+            match target_key {
+                Some(script_file_name) => {
+                    match registry.get(&(script_file_name.clone(), header.script_path)) {
+                        Some(identity) => {
+                            *accum.counts.entry(identity.clone()).or_insert(0) += 1;
+                        }
+                        None => {
+                            *accum
+                                .unresolved
+                                .entry(format!("{script_file_name}:{}", header.script_path))
+                                .or_insert(0) += 1;
+                        }
+                    }
+                }
+                None => {
+                    *accum
+                        .unresolved
+                        .entry(format!(
+                            "<external {}>:{}",
+                            header.script_file, header.script_path
+                        ))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+        monobehaviours_total += file_behaviours;
+        payload_bytes_total += file_payload_bytes;
+        if source.summary.objects_truncated {
+            truncated_files.push(source.display.clone());
+        }
+        file_rows.push(json!({
+            "container": source.container,
+            "monobehaviours": file_behaviours,
+            "objects_total": source.summary.object_count,
+            "objects_truncated": source.summary.objects_truncated,
+            "payload_bytes_after_header": file_payload_bytes,
+            "source": source.display,
+        }));
+    }
+    let counts_by_script_class: Vec<Value> = {
+        let mut rows: Vec<(&ScriptIdentity, &u64)> = accum.counts.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+        rows.iter()
+            .map(|(identity, count)| {
+                json!({
+                    "assembly": identity.assembly,
+                    "class": identity.class,
+                    "count": count,
+                    "namespace": identity.namespace,
+                })
+            })
+            .collect()
+    };
+    let unresolved_rows: Vec<Value> = accum
+        .unresolved
+        .iter()
+        .map(|(target, count)| json!({"count": count, "target": target}))
+        .collect();
+    let unresolved_total: u64 = accum.unresolved.values().sum();
+    let record = json!({
+        "counts_by_script_class": counts_by_script_class,
+        "distinct_script_classes": accum.counts.len(),
+        "files": file_rows,
+        "files_examined": parsed.len(),
+        "files_failed": failed,
+        "header_anomalies": accum.anomalies,
+        "header_anomaly_count": accum.anomaly_count,
+        "monoscript_anomalies": accum.script_anomalies,
+        "monoscript_anomaly_count": accum.script_anomaly_count,
+        "root": target_name,
+        "totals": {
+            "monobehaviours": monobehaviours_total,
+            "monoscripts": monoscripts_total,
+            "null_script_references": accum.null_script_references,
+            "payload_bytes_after_header": payload_bytes_total,
+            "unresolved_script_references": unresolved_total,
+        },
+        "unresolved_script_references": unresolved_rows,
+    });
+    // Retention binds to the census record's own hash (the
+    // directory-target pattern of the game census).
+    let canonical = serde_json::to_string(&record).unwrap_or_default();
+    let key = sha256_hex(canonical.as_bytes());
+    let (digest, retention_note) =
+        match proof::retain_export(config, &key, "unity_monobehaviour_census", &record) {
+            Ok(digest) => (Some(digest), None),
+            Err(error) => (None, Some(error.message)),
+        };
+    let mut facts = record.clone();
+    facts["export_digest"] = match &digest {
+        Some(digest) => json!(digest),
+        None => Value::Null,
+    };
+    let mut evidence = Evidence::new("census_unity_monobehaviours", "unity");
+    evidence.add_finding(Finding::new(
+        "unity_monobehaviour_census",
+        Confidence::Observed,
+        facts,
+    ));
+    if let Some(note) = retention_note {
+        evidence.add_unknown(
+            "retention",
+            format!(
+                "census retention failed ({note}); the census facts stand, but no proof can bind this run"
+            ),
+        );
+    }
+    if !failed.is_empty() {
+        evidence.add_unknown(
+            "sources",
+            format!(
+                "{} source(s) could not be censused: {}",
+                failed.len(),
+                failed
+                    .iter()
+                    .map(|row| format!("{} ({})", row["source"], row["error"]))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            ),
+        );
+    }
+    if unresolved_total > 0 {
+        evidence.add_unknown(
+            "script references",
+            format!(
+                "{unresolved_total} MonoBehaviour(s) reference a MonoScript that is not in the censused files; they are counted under unresolved_script_references by target, never dropped"
+            ),
+        );
+    }
+    if accum.anomaly_count > 0 || accum.script_anomaly_count > 0 {
+        evidence.add_unknown(
+            "payload anomalies",
+            format!(
+                "{} MonoBehaviour header(s) and {} MonoScript payload(s) did not parse; they are named in the census record and counted in its totals",
+                accum.anomaly_count, accum.script_anomaly_count
+            ),
+        );
+    }
+    if !truncated_files.is_empty() {
+        evidence.add_unknown(
+            "object rows",
+            format!(
+                "object rows were truncated at UNITY_MB_OBJECTS_MAX in: {}; counts for those files are a floor, not a total",
+                truncated_files.join(", ")
+            ),
+        );
+    }
+    if walk_capped {
+        evidence.add_unknown(
+            "walk coverage",
+            format!(
+                "the directory walk stopped at UNITY_MB_FILES_MAX ({UNITY_MB_FILES_MAX}) candidate files; counts are a floor, not a total"
+            ),
+        );
+    }
+    if walk_unreadable > 0 {
+        evidence.add_unknown(
+            "walk coverage",
+            format!("{walk_unreadable} directory entries could not be read and are uncounted"),
+        );
+    }
+    evidence.coverage.examined = parsed.len() as u64;
+    evidence.coverage.total = sources.len() as u64;
+    evidence.coverage.exhaustive =
+        evidence.coverage.examined == evidence.coverage.total && evidence.unknowns.is_empty();
     Ok(evidence.to_value())
 }
 
@@ -2775,5 +3703,361 @@ mod tests {
         assert_eq!(safe_file_name("a/b\\c:d", "x"), "a_b_c_d");
         assert_eq!(safe_file_name("..", "fallback"), "fallback");
         assert_eq!(safe_file_name("Hero.moc3", "x"), "Hero.moc3");
+    }
+
+    // ---------------------------------------------------------
+    // MonoBehaviour census (BQ-2)
+    // ---------------------------------------------------------
+
+    fn mb_i16(out: &mut Vec<u8>, value: i16, little: bool) {
+        if little {
+            out.extend_from_slice(&value.to_le_bytes());
+        } else {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn mb_i32(out: &mut Vec<u8>, value: i32, little: bool) {
+        if little {
+            out.extend_from_slice(&value.to_le_bytes());
+        } else {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn mb_i64(out: &mut Vec<u8>, value: i64, little: bool) {
+        if little {
+            out.extend_from_slice(&value.to_le_bytes());
+        } else {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn mb_u32(out: &mut Vec<u8>, value: u32, little: bool) {
+        if little {
+            out.extend_from_slice(&value.to_le_bytes());
+        } else {
+            out.extend_from_slice(&value.to_be_bytes());
+        }
+    }
+
+    fn mb_aligned_string(out: &mut Vec<u8>, text: &str, little: bool) {
+        mb_i32(out, text.len() as i32, little);
+        out.extend_from_slice(text.as_bytes());
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+    }
+
+    /// One object row of the census fixture: (path id,
+    /// class id, payload). Class 114 rows are type index 0
+    /// and 115 rows type index 1, matching the fixed type
+    /// table the builder writes.
+    struct MbFixtureObject {
+        class_id: i64,
+        path_id: i64,
+        payload: Vec<u8>,
+    }
+
+    /// A version-22 SerializedFile with type trees disabled
+    /// (the shipped-build shape): types 114 + 115, the given
+    /// objects, an empty script-types section, and the given
+    /// externals (full paths; the parser keeps base names).
+    fn mb_build_sf(little: bool, objects: &[MbFixtureObject], externals: &[&str]) -> Vec<u8> {
+        let mut meta: Vec<u8> = Vec::new();
+        meta.extend_from_slice(b"2022.3.0f1\0"); // unity version
+        mb_u32(&mut meta, 0, little); // script compatibility
+        meta.push(0); // type trees disabled
+        mb_u32(&mut meta, 2, little); // type count
+        for (index, class_id) in [CLASS_MONO_BEHAVIOUR, CLASS_MONO_SCRIPT].iter().enumerate() {
+            mb_i32(&mut meta, *class_id as i32, little);
+            meta.push(0); // is_stripped
+            mb_i16(&mut meta, index as i16, little); // script type index
+            if *class_id == CLASS_MONO_BEHAVIOUR {
+                meta.extend_from_slice(&[0x51; 16]); // script id
+            }
+            meta.extend_from_slice(&[0x52; 16]); // type hash
+        }
+        mb_u32(&mut meta, objects.len() as u32, little);
+        let mut start: u64 = 0;
+        for object in objects {
+            while !meta.len().is_multiple_of(4) {
+                meta.push(0);
+            }
+            mb_i64(&mut meta, object.path_id, little);
+            // byte_start is a u64 in the file's endianness.
+            if little {
+                mb_u32(&mut meta, start as u32, little);
+                mb_u32(&mut meta, 0, little);
+            } else {
+                mb_u32(&mut meta, 0, little);
+                mb_u32(&mut meta, start as u32, little);
+            }
+            start += object.payload.len() as u64;
+            mb_u32(&mut meta, object.payload.len() as u32, little);
+            mb_i32(
+                &mut meta,
+                if object.class_id == CLASS_MONO_SCRIPT {
+                    1
+                } else {
+                    0
+                },
+                little,
+            );
+        }
+        mb_i32(&mut meta, 0, little); // script types: none
+        mb_i32(&mut meta, externals.len() as i32, little);
+        for path in externals {
+            meta.extend_from_slice(b"\0"); // temp_empty
+            meta.extend_from_slice(&[0x53; 16]); // guid
+            mb_i32(&mut meta, 0, little); // type
+            meta.extend_from_slice(path.as_bytes());
+            meta.push(0);
+        }
+        let data_offset = 48 + meta.len() as u64;
+        let file_size = data_offset + start;
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(file_size as u32).to_be_bytes());
+        out.extend_from_slice(&22_u32.to_be_bytes());
+        out.extend_from_slice(&(data_offset as u32).to_be_bytes());
+        out.push(if little { 0 } else { 1 });
+        out.extend_from_slice(&[0; 3]);
+        // Extended tail (the layout parse_serialized_file
+        // verifies): u32 metadata size at 20, i64 file size
+        // at 24, i64 data offset at 32, i64 unknown at 40.
+        out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
+        out.extend_from_slice(&file_size.to_be_bytes());
+        out.extend_from_slice(&data_offset.to_be_bytes());
+        out.extend_from_slice(&0_i64.to_be_bytes());
+        out.extend_from_slice(&meta);
+        for object in objects {
+            out.extend_from_slice(&object.payload);
+        }
+        out
+    }
+
+    fn mb_script_payload(class: &str, namespace: &str, assembly: &str, little: bool) -> Vec<u8> {
+        let mut out = Vec::new();
+        mb_aligned_string(&mut out, class, little); // m_Name mirrors the class in fixtures
+        mb_i32(&mut out, 0, little); // m_ExecutionOrder
+        out.extend_from_slice(&[0; 16]); // m_PropertiesHash
+        mb_aligned_string(&mut out, class, little);
+        mb_aligned_string(&mut out, namespace, little);
+        mb_aligned_string(&mut out, assembly, little);
+        out.push(0); // m_IsEditorScript
+        out
+    }
+
+    fn mb_behaviour_payload(
+        script_file: i32,
+        script_path: i64,
+        extra: &[u8],
+        little: bool,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        mb_i32(&mut out, 0, little); // m_GameObject file index
+        mb_i64(&mut out, 4242, little); // m_GameObject path id
+        out.push(1); // m_Enabled
+        out.extend_from_slice(&[0; 3]); // alignment to offset 16
+        mb_i32(&mut out, script_file, little);
+        mb_i64(&mut out, script_path, little);
+        mb_aligned_string(&mut out, "", little); // m_Name
+        out.extend_from_slice(extra);
+        out
+    }
+
+    fn mb_run_census(dir: &Path) -> Value {
+        let cfg = format!(
+            "state_dir = {:?}\ntarget_roots = [{:?}]\n",
+            dir.join("state"),
+            dir
+        );
+        let config = Config::from_toml_str(&cfg).unwrap();
+        census_unity_monobehaviours(
+            &Registry::new(),
+            &config,
+            &json!({"target": dir.to_string_lossy()}),
+        )
+        .unwrap()
+    }
+
+    fn mb_record(value: &Value) -> &Value {
+        &value["findings"][0]["facts"]
+    }
+
+    fn mb_temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("fathom-mb-{tag}-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn mb_census_resolves_same_file_scripts() {
+        let root = mb_temp_dir("same-file");
+        let objects = vec![
+            MbFixtureObject {
+                class_id: CLASS_MONO_SCRIPT,
+                path_id: 100,
+                payload: mb_script_payload("Widget", "Game", "Assembly-CSharp", true),
+            },
+            MbFixtureObject {
+                class_id: CLASS_MONO_BEHAVIOUR,
+                path_id: 1,
+                payload: mb_behaviour_payload(0, 100, &[7; 7], true),
+            },
+            MbFixtureObject {
+                class_id: CLASS_MONO_BEHAVIOUR,
+                path_id: 2,
+                payload: mb_behaviour_payload(0, 100, &[7; 7], true),
+            },
+            MbFixtureObject {
+                class_id: CLASS_MONO_BEHAVIOUR,
+                path_id: 3,
+                payload: mb_behaviour_payload(0, 0, &[7; 3], true),
+            },
+        ];
+        fs::write(
+            root.join("resources.assets"),
+            mb_build_sf(true, &objects, &[]),
+        )
+        .unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["totals"]["monobehaviours"], 3);
+        assert_eq!(record["totals"]["monoscripts"], 1);
+        assert_eq!(record["totals"]["null_script_references"], 1);
+        assert_eq!(record["totals"]["unresolved_script_references"], 0);
+        // All three headers parse, so all three payloads
+        // count — including the null-script behaviour's 3.
+        assert_eq!(record["totals"]["payload_bytes_after_header"], 17);
+        assert_eq!(record["header_anomaly_count"], 0);
+        assert_eq!(record["distinct_script_classes"], 1);
+        assert_eq!(record["counts_by_script_class"][0]["class"], "Widget");
+        assert_eq!(record["counts_by_script_class"][0]["count"], 2);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mb_census_resolves_cross_file_scripts() {
+        let root = mb_temp_dir("cross-file");
+        let level = vec![MbFixtureObject {
+            class_id: CLASS_MONO_BEHAVIOUR,
+            path_id: 9,
+            payload: mb_behaviour_payload(1, 55, &[1; 4], true),
+        }];
+        fs::write(
+            root.join("level0"),
+            mb_build_sf(true, &level, &["resources.assets"]),
+        )
+        .unwrap();
+        let resources = vec![MbFixtureObject {
+            class_id: CLASS_MONO_SCRIPT,
+            path_id: 55,
+            payload: mb_script_payload("Hud", "", "Assembly-CSharp", true),
+        }];
+        fs::write(
+            root.join("resources.assets"),
+            mb_build_sf(true, &resources, &[]),
+        )
+        .unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["totals"]["monobehaviours"], 1);
+        assert_eq!(record["totals"]["unresolved_script_references"], 0);
+        assert_eq!(record["counts_by_script_class"][0]["class"], "Hud");
+        assert_eq!(record["counts_by_script_class"][0]["count"], 1);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mb_census_reads_big_endian_files() {
+        let root = mb_temp_dir("big-endian");
+        let objects = vec![
+            MbFixtureObject {
+                class_id: CLASS_MONO_SCRIPT,
+                path_id: 7,
+                payload: mb_script_payload("Dial", "Ui", "Game", false),
+            },
+            MbFixtureObject {
+                class_id: CLASS_MONO_BEHAVIOUR,
+                path_id: 8,
+                payload: mb_behaviour_payload(0, 7, &[3; 5], false),
+            },
+        ];
+        fs::write(
+            root.join("resources.assets"),
+            mb_build_sf(false, &objects, &[]),
+        )
+        .unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["totals"]["monobehaviours"], 1);
+        assert_eq!(record["counts_by_script_class"][0]["class"], "Dial");
+        assert_eq!(record["totals"]["payload_bytes_after_header"], 5);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mb_census_names_a_truncated_header() {
+        let root = mb_temp_dir("truncated");
+        let objects = vec![MbFixtureObject {
+            class_id: CLASS_MONO_BEHAVIOUR,
+            path_id: 1,
+            payload: vec![0; 10],
+        }];
+        fs::write(
+            root.join("resources.assets"),
+            mb_build_sf(true, &objects, &[]),
+        )
+        .unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["totals"]["monobehaviours"], 1);
+        assert_eq!(record["header_anomaly_count"], 1);
+        assert_eq!(record["distinct_script_classes"], 0);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mb_census_counts_dangling_script_references() {
+        let root = mb_temp_dir("dangling");
+        let objects = vec![MbFixtureObject {
+            class_id: CLASS_MONO_BEHAVIOUR,
+            path_id: 1,
+            payload: mb_behaviour_payload(0, 999, &[0; 2], true),
+        }];
+        fs::write(
+            root.join("resources.assets"),
+            mb_build_sf(true, &objects, &[]),
+        )
+        .unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["totals"]["unresolved_script_references"], 1);
+        assert_eq!(
+            record["unresolved_script_references"][0]["target"],
+            "resources.assets:999"
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn mb_externals_walk_returns_base_names() {
+        let objects = vec![MbFixtureObject {
+            class_id: CLASS_MONO_SCRIPT,
+            path_id: 1,
+            payload: mb_script_payload("A", "", "B", true),
+        }];
+        let bytes = mb_build_sf(
+            true,
+            &objects,
+            &["Assets/first.assets", "C:\\x\\second.assets"],
+        );
+        let names = parse_sf_externals(&bytes).unwrap();
+        assert_eq!(
+            names,
+            vec!["first.assets".to_string(), "second.assets".to_string()]
+        );
     }
 }

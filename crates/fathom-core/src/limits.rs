@@ -316,6 +316,28 @@ pub const UNITY_EXTRACT_BYTES_MAX: u64 = 4_294_967_296;
 /// (game-extract lane).
 pub const UNITY_EXTRACT_CARVES_MAX: usize = 256;
 
+/// File identifiers (externals) retained per SerializedFile
+/// by the MonoBehaviour census walk (BQ-2); script-type rows
+/// share the bound on the same walk.
+pub const UNITY_EXTERNALS_MAX: usize = 100_000;
+
+/// Candidate files one `census_unity_monobehaviours` call
+/// examines under its target directory (BQ-2); files past
+/// the bound are reported, never silently dropped.
+pub const UNITY_MB_FILES_MAX: usize = 4_096;
+
+/// Object payload rows the MonoBehaviour census retains
+/// per SerializedFile (BQ-2) — far above the shared
+/// UNITY_OBJECTS_MAX record cap, because a census that
+/// stops at the record cap is a floor, not a census; the
+/// corpus's largest file declares 642,185 objects. Rows
+/// past the bound are reported via the truncation flag.
+pub const UNITY_MB_OBJECTS_MAX: usize = 4_000_000;
+
+/// Directory depth one `census_unity_monobehaviours` call
+/// descends under its target directory (BQ-2).
+pub const UNITY_MB_WALK_DEPTH_MAX: usize = 6;
+
 /// Directory nodes in one UnityFS bundle (readers SPEC §2.3).
 pub const UNITY_NODES_MAX: usize = 100_000;
 
