@@ -29,6 +29,7 @@ pub mod layout;
 pub mod mesh;
 pub mod python;
 pub mod renpy;
+pub mod resources;
 pub mod rpgmaker;
 pub mod sections;
 pub mod spec;
@@ -1273,6 +1274,22 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(gpu::inspect_gpu_code_object),
+    );
+    registry.register(
+        descriptor(
+            "inspect_pe_resources",
+            ToolClass::Read,
+            "pe",
+            "PE resource census: the .rsrc directory walked to its \
+             leaves — RT_DIALOG templates decoded (classic and \
+             DLGTEMPLATEEX), RT_GROUP_ICON reassembled into .ico \
+             form and hashed, RT_BITMAP reassembled into .bmp \
+             form, RT_MANIFEST inlined, RCDATA fingerprinted; \
+             header facts carry architecture, subsystem, DLL \
+             characteristics, sections, and .NET presence",
+            target_schema(),
+        ),
+        Arc::new(resources::inspect_pe_resources),
     );
     registry.register(
         descriptor(
