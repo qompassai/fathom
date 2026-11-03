@@ -675,6 +675,25 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "census_unity_monobehaviours",
+            ToolClass::Observe,
+            "unity",
+            "Typetree-independent MonoBehaviour census of a Unity *_Data \
+             directory: MonoBehaviour headers and MonoScript identities \
+             parsed from raw object payloads (shipped builds disable type \
+             trees, so no typetree is consulted), counts by script class \
+             (assembly, namespace, class), per-file totals, and unresolved \
+             script references, null script references, and header \
+             anomalies named, never dropped. UnityFS bundles \
+             (data.unity3d) are censused node by node; LZMA blocks-info \
+             bundles are reported, not decoded. Script field payloads \
+             are counted in bytes, not expanded",
+            target_schema(),
+        ),
+        Arc::new(unity::census_unity_monobehaviours),
+    );
+    registry.register(
+        descriptor(
             "extract_gamemaker_audio",
             ToolClass::Observe,
             "gamemaker",
