@@ -1864,7 +1864,7 @@ mod tests {
         let built = build(
             &specs,
             &Options {
-                file_count_override: Some(100_001),
+                file_count_override: Some(PAK_ENTRIES_MAX as i32 + 1),
                 ..Options::default()
             },
         );
