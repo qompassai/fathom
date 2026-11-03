@@ -452,10 +452,8 @@ fn load_index(
 ) -> Result<(Index, bool), FathomError> {
     let stored = reader.read_range(footer.index_offset, footer.index_size)?;
     let stored_hash_ok = hex_bytes(&Sha1::digest(&stored)) == hex_bytes(&footer.index_sha1);
-    if stored_hash_ok {
-        if let Ok(index) = parse_index(&stored) {
-            return Ok((index, false));
-        }
+    if stored_hash_ok && let Ok(index) = parse_index(&stored) {
+        return Ok((index, false));
     }
     let Some(key) = key else {
         if !stored_hash_ok {
@@ -482,10 +480,8 @@ fn load_index(
             if hex_bytes(&Sha1::digest(candidate)) == hex_bytes(&footer.index_sha1) {
                 return parse_index(candidate).map(|index| (index, true));
             }
-            if stored_hash_ok {
-                if let Ok(index) = parse_index(candidate) {
-                    return Ok((index, true));
-                }
+            if stored_hash_ok && let Ok(index) = parse_index(candidate) {
+                return Ok((index, true));
             }
         }
     }
@@ -1084,52 +1080,49 @@ pub fn inspect_unreal_pak(
         let data_start = decoded.offset + header.header_size;
         if header.encrypted {
             encrypted_flagged_count += 1;
-            if let Some(key) = key.as_ref() {
-                if decoded.compressed_size <= ENTRY_DECRYPT_BYTES_MAX {
-                    let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
-                        vec![decoded.compressed_size]
-                    } else {
-                        decoded.block_sizes.clone()
-                    };
-                    match decrypted_entry_bytes(&mut reader, data_start, &effective, key) {
-                        Ok(plain) => {
-                            let verified = hex_bytes(&Sha1::digest(&plain)) == header.sha1;
-                            row["stored_sha1_verified"] = json!(verified);
-                            row["decrypted"] = json!(true);
-                            if !verified {
-                                row["status"] = json!("sha1_mismatch");
-                                sha1_mismatch_count += 1;
-                                rows.push(row);
-                                continue;
-                            }
-                            examined += 1;
-                            decrypted_count += 1;
-                            row["status"] = json!("verified");
-                            match method_name.as_deref() {
-                                Some("None") => {
-                                    row["content_verified"] = json!(true);
-                                }
-                                Some("Zlib") => {
-                                    let blocks = split_blocks(&plain, &effective);
-                                    let ok =
-                                        zlib_blocks_verify(&blocks, decoded.uncompressed_size)?;
-                                    row["content_verified"] = json!(ok);
-                                }
-                                Some(other)
-                                    if !unverifiable_methods.contains(&other.to_string()) =>
-                                {
-                                    unverifiable_methods.push(other.to_string());
-                                }
-                                _ => {}
-                            }
+            if let Some(key) = key.as_ref()
+                && decoded.compressed_size <= ENTRY_DECRYPT_BYTES_MAX
+            {
+                let effective: Vec<u64> = if decoded.block_sizes.is_empty() {
+                    vec![decoded.compressed_size]
+                } else {
+                    decoded.block_sizes.clone()
+                };
+                match decrypted_entry_bytes(&mut reader, data_start, &effective, key) {
+                    Ok(plain) => {
+                        let verified = hex_bytes(&Sha1::digest(&plain)) == header.sha1;
+                        row["stored_sha1_verified"] = json!(verified);
+                        row["decrypted"] = json!(true);
+                        if !verified {
+                            row["status"] = json!("sha1_mismatch");
+                            sha1_mismatch_count += 1;
                             rows.push(row);
                             continue;
                         }
-                        Err(_) => {
-                            row["status"] = json!("unreadable");
-                            rows.push(row);
-                            continue;
+                        examined += 1;
+                        decrypted_count += 1;
+                        row["status"] = json!("verified");
+                        match method_name.as_deref() {
+                            Some("None") => {
+                                row["content_verified"] = json!(true);
+                            }
+                            Some("Zlib") => {
+                                let blocks = split_blocks(&plain, &effective);
+                                let ok = zlib_blocks_verify(&blocks, decoded.uncompressed_size)?;
+                                row["content_verified"] = json!(ok);
+                            }
+                            Some(other) if !unverifiable_methods.contains(&other.to_string()) => {
+                                unverifiable_methods.push(other.to_string());
+                            }
+                            _ => {}
                         }
+                        rows.push(row);
+                        continue;
+                    }
+                    Err(_) => {
+                        row["status"] = json!("unreadable");
+                        rows.push(row);
+                        continue;
                     }
                 }
             }

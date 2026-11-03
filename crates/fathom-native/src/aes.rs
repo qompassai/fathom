@@ -110,7 +110,7 @@ impl Aes256 {
         while i < 60 {
             let prev = &round_keys[(i - 1) * 4..(i - 1) * 4 + 4];
             let mut temp = [prev[0], prev[1], prev[2], prev[3]];
-            if i % 8 == 0 {
+            if i.is_multiple_of(8) {
                 // SubWord(RotWord(temp)) with the round
                 // constant on the first byte.
                 temp = [
@@ -234,13 +234,12 @@ fn unaligned(message: &str) -> FathomError {
 /// padding decision: the formats pad with zeroes to the
 /// AES block size and record the true length elsewhere.
 pub fn ecb_encrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, FathomError> {
-    if data.len() % 16 != 0 {
+    if !data.len().is_multiple_of(16) {
         return Err(unaligned("ECB input length is not a multiple of 16"));
     }
     let cipher = Aes256::new(key);
     let mut out = data.to_vec();
-    for chunk in out.chunks_exact_mut(16) {
-        let block: &mut [u8; 16] = chunk.try_into().expect("16-byte chunk");
+    for block in out.as_chunks_mut::<16>().0 {
         cipher.encrypt_block(block);
     }
     Ok(out)
@@ -248,13 +247,12 @@ pub fn ecb_encrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, FathomError> 
 
 /// ECB-decrypt a block-aligned buffer.
 pub fn ecb_decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, FathomError> {
-    if data.len() % 16 != 0 {
+    if !data.len().is_multiple_of(16) {
         return Err(unaligned("ECB input length is not a multiple of 16"));
     }
     let cipher = Aes256::new(key);
     let mut out = data.to_vec();
-    for chunk in out.chunks_exact_mut(16) {
-        let block: &mut [u8; 16] = chunk.try_into().expect("16-byte chunk");
+    for block in out.as_chunks_mut::<16>().0 {
         cipher.decrypt_block(block);
     }
     Ok(out)
