@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aes;
 pub mod artifact;
 pub mod audio;
 pub mod beam;
