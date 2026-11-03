@@ -162,15 +162,24 @@ impl<'a> BeCursor<'a> {
     }
 }
 
-/// The parsed UnityFS header.
+/// The parsed UnityFS header. Flag bits follow Unity's
+/// ArchiveFlags (verified against the corpus 2026-11-03):
+/// 0x40 = blocks and directory info combined (the blob
+/// sits right after the header), 0x80 = blocks info at the
+/// end of the file, 0x200 = block info needs padding at
+/// the start (the data blocks begin on a 16-byte boundary
+/// after a combined blob; under the pre-2020 flag set the
+/// same bit announced encryption, which this reader never
+/// supported either way).
 struct BundleHeader {
     blocks_info_at_end: bool,
+    blocks_info_combined: bool,
+    blocks_need_padding: bool,
     bundle_size: i64,
     compressed_blocks_info_size: u32,
     data_start: u64,
     flags: u32,
     format_version: u32,
-    has_directory_info: bool,
     uncompressed_blocks_info_size: u32,
     unity_revision: String,
     unity_version: String,
@@ -204,13 +213,14 @@ fn parse_bundle_header(prefix: &[u8]) -> Result<BundleHeader, FathomError> {
         data_start = data_start.div_ceil(16) * 16;
     }
     Ok(BundleHeader {
-        blocks_info_at_end: flags & 0x40 != 0,
+        blocks_info_at_end: flags & 0x80 != 0,
+        blocks_info_combined: flags & 0x40 != 0,
+        blocks_need_padding: flags & 0x200 != 0,
         bundle_size,
         compressed_blocks_info_size,
         data_start,
         flags,
         format_version,
-        has_directory_info: flags & 0x80 != 0,
         uncompressed_blocks_info_size,
         unity_revision,
         unity_version,
@@ -427,11 +437,16 @@ fn skip_type_tree(cursor: &mut SfCursor, version: u32) -> Result<(), FathomError
     if version >= 12 || version == 10 {
         // Blob layout (verified against the UnityPy
         // reader): node count, string-buffer size,
-        // fixed-size nodes (28 bytes, 36 with the ref-type
-        // hash from version 18), then the string buffer.
+        // fixed-size nodes (24 bytes: hBBIIiii, plus the
+        // 8-byte ref-type hash from version 19 = 32), then
+        // the string buffer. (Corrected 2026-11-03: the
+        // 28/36 sizes and the version-18 threshold were
+        // wrong and derailed every tree-carrying file —
+        // invisible while the corpus's loose files all ship
+        // with trees disabled.)
         let node_count = cursor.read_u32()?;
         let buffer_size = cursor.read_u32()?;
-        let node_bytes = if version >= 18 { 36 } else { 28 };
+        let node_bytes = if version >= 19 { 32 } else { 24 };
         let nodes_bytes = (node_count as usize)
             .checked_mul(node_bytes)
             .ok_or_else(|| resource("type tree node table overflows"))?;
@@ -844,7 +859,7 @@ pub fn inspect_unity_bundle(
         "bundle_size_discrepancy": header.bundle_size >= 0 && header.bundle_size as u64 != file_len,
         "container": "unityfs",
         "format_version": header.format_version,
-        "has_directory_info": header.has_directory_info,
+        "blocks_info_combined": header.blocks_info_combined,
         "unity_revision": header.unity_revision,
         "unity_version": header.unity_version,
     });
@@ -925,6 +940,8 @@ pub fn inspect_unity_bundle(
     let info = parse_blocks_info(&info_bytes)?;
     let blocks_file_start = if header.blocks_info_at_end {
         header.data_start
+    } else if header.blocks_need_padding {
+        (blocks_info_offset + u64::from(header.compressed_blocks_info_size)).div_ceil(16) * 16
     } else {
         blocks_info_offset + u64::from(header.compressed_blocks_info_size)
     };
@@ -1500,6 +1517,8 @@ fn bundle_serialized_nodes(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String
     }
     let blocks_file_start = if header.blocks_info_at_end {
         header.data_start
+    } else if header.blocks_need_padding {
+        (blocks_info_offset + u64::from(header.compressed_blocks_info_size)).div_ceil(16) * 16
     } else {
         blocks_info_offset + u64::from(header.compressed_blocks_info_size)
     };
@@ -2573,6 +2592,8 @@ fn load_blocks_info(
     let info = parse_blocks_info(&info_bytes)?;
     let blocks_file_start = if header.blocks_info_at_end {
         header.data_start
+    } else if header.blocks_need_padding {
+        (blocks_info_offset + u64::from(header.compressed_blocks_info_size)).div_ceil(16) * 16
     } else {
         blocks_info_offset + u64::from(header.compressed_blocks_info_size)
     };
@@ -2818,10 +2839,16 @@ mod tests {
                 body.push(0); // is_array
                 body.extend_from_slice(&0_u32.to_le_bytes()); // type offset
                 body.extend_from_slice(&5_u32.to_le_bytes()); // name offset
-                body.extend_from_slice(&(-1_i64).to_le_bytes()); // byte size
+                // m_ByteSize is an i32 in the blob node
+                // struct (hBBIIiii + Q ref hash = 32 bytes);
+                // this fixture wrote it as an i64 until
+                // 2026-11-03, which is what let the reader's
+                // wrong 36-byte skip pass its own tests while
+                // real tree-carrying files derailed.
+                body.extend_from_slice(&(-1_i32).to_le_bytes()); // byte size
                 body.extend_from_slice(&0_i32.to_le_bytes()); // index
                 body.extend_from_slice(&0_i32.to_le_bytes()); // flags
-                body.extend_from_slice(&0_u64.to_le_bytes()); // ref hash (v>=18)
+                body.extend_from_slice(&0_u64.to_le_bytes()); // ref hash (v>=19)
                 body.extend_from_slice(blob);
                 body.extend_from_slice(&0_i32.to_le_bytes()); // type dependencies
             }
@@ -2852,6 +2879,7 @@ mod tests {
     struct BundleOptions {
         blocks_info_at_end: bool,
         blocks_info_compression: u32,
+        blocks_need_padding: bool,
         bundle_size_override: Option<i64>,
         data_block_compression: u32,
         format: u32,
@@ -2862,6 +2890,7 @@ mod tests {
             BundleOptions {
                 blocks_info_at_end: false,
                 blocks_info_compression: 2,
+                blocks_need_padding: false,
                 bundle_size_override: None,
                 data_block_compression: 2,
                 format: 8,
@@ -2977,18 +3006,34 @@ mod tests {
         } else {
             header_len
         };
+        // With BlockInfoNeedPaddingAtStart, a combined
+        // blocks-info blob is followed by zero padding up
+        // to the next 16-byte boundary before the blocks.
+        let pad = if !options.blocks_info_at_end && options.blocks_need_padding {
+            (data_start + info_stored.len()).div_ceil(16) * 16 - (data_start + info_stored.len())
+        } else {
+            0
+        };
         let total = if options.blocks_info_at_end {
             data_start + block_stored.len() + info_stored.len()
         } else {
-            data_start + info_stored.len() + block_stored.len()
+            data_start + info_stored.len() + pad + block_stored.len()
         };
         let bundle_size = options.bundle_size_override.unwrap_or(total as i64);
         header.extend_from_slice(&bundle_size.to_be_bytes());
         header.extend_from_slice(&be32(info_compressed_size));
         header.extend_from_slice(&be32(info.len() as u32));
-        let mut flags = options.blocks_info_compression | 0x80;
+        // Unity ArchiveFlags: 0x80 = blocks info at the
+        // end, 0x40 = blocks and directory info combined
+        // (the blob right after the header).
+        let mut flags = options.blocks_info_compression;
         if options.blocks_info_at_end {
+            flags |= 0x80;
+        } else {
             flags |= 0x40;
+        }
+        if options.blocks_need_padding {
+            flags |= 0x200;
         }
         header.extend_from_slice(&be32(flags));
         header.resize(data_start, 0);
@@ -2998,6 +3043,7 @@ mod tests {
             out.extend_from_slice(&info_stored);
         } else {
             out.extend_from_slice(&info_stored);
+            out.resize(out.len() + pad, 0);
             out.extend_from_slice(&block_stored);
         }
         out
@@ -3088,6 +3134,36 @@ mod tests {
         let rows = node_rows(&value);
         assert_eq!(rows[0]["status"], "censused");
         assert_eq!(rows[0]["serialized"]["object_count"], 3);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_combined_blocks_info_with_padding() {
+        // The Unity 6000-era Addressables shape (flags
+        // 0x243 on the real corpus): LZ4HC blocks info
+        // combined after the header, 0x200 padding before
+        // the data blocks. Regression for the ArchiveFlags
+        // bit correction of 2026-11-03 — before it, this
+        // shape's blocks info was read from the file tail
+        // and every such bundle failed to decompress.
+        let sf = build_sf(true);
+        let bundle = build_bundle(
+            &sf,
+            b"data",
+            &BundleOptions {
+                blocks_info_compression: 3,
+                blocks_need_padding: true,
+                data_block_compression: 3,
+                ..BundleOptions::default()
+            },
+        );
+        let (root, result) = run("unity-combined-padding", &bundle);
+        let value = result.unwrap();
+        let facts = bundle_facts(&value);
+        assert_eq!(facts["blocks_info_combined"], true);
+        assert_eq!(facts["blocks_info_at_end"], false);
+        assert_eq!(facts["blocks_info_decoded"], true);
+        assert_eq!(node_rows(&value)[0]["status"], "censused");
         fs::remove_dir_all(&root).ok();
     }
 
@@ -3292,7 +3368,7 @@ mod tests {
         header.extend_from_slice(&(total as i64).to_be_bytes());
         header.extend_from_slice(&be32(info.len() as u32));
         header.extend_from_slice(&be32(info.len() as u32));
-        header.extend_from_slice(&be32(0x80));
+        header.extend_from_slice(&be32(0x40)); // combined blocks info
         header.resize(data_start, 0);
         let mut bundle = header;
         bundle.extend_from_slice(&info);
@@ -3362,7 +3438,7 @@ mod tests {
         header.extend_from_slice(&(total as i64).to_be_bytes());
         header.extend_from_slice(&be32(compressed.len() as u32));
         header.extend_from_slice(&be32(info.len() as u32));
-        header.extend_from_slice(&be32(2 | 0x80));
+        header.extend_from_slice(&be32(2 | 0x40)); // LZ4 blocks info, combined
         header.resize(data_start, 0);
         let mut bundle = header;
         bundle.extend_from_slice(&compressed);
@@ -4039,6 +4115,80 @@ mod tests {
             record["unresolved_script_references"][0]["target"],
             "resources.assets:999"
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// A version-22 SerializedFile with type trees ENABLED
+    /// and a non-empty blob on the first type (2 nodes x
+    /// 32 bytes + an 8-byte string buffer), a second type
+    /// after it, and one object — the shape whose walk the
+    /// 2026-11-03 node-size correction repaired.
+    fn mb_build_sf_treed() -> Vec<u8> {
+        let mut meta: Vec<u8> = Vec::new();
+        meta.extend_from_slice(b"6000.0.32f1\0");
+        mb_u32(&mut meta, 0, true);
+        meta.push(1); // type trees enabled
+        mb_u32(&mut meta, 2, true); // type count
+        // Type A: class 1, with a tree blob and (v>=21) an
+        // empty dependency array.
+        mb_i32(&mut meta, 1, true);
+        meta.push(0);
+        mb_i16(&mut meta, -1, true);
+        meta.extend_from_slice(&[0x61; 16]); // type hash
+        mb_u32(&mut meta, 2, true); // blob node count
+        mb_u32(&mut meta, 8, true); // blob string-buffer size
+        meta.extend_from_slice(&[0; 64]); // 2 nodes x 32 bytes
+        meta.extend_from_slice(b"GameObj\0"); // string buffer
+        mb_i32(&mut meta, 0, true); // type dependencies: none
+        // Type B: class 114 (MonoBehaviour), empty blob.
+        mb_i32(&mut meta, CLASS_MONO_BEHAVIOUR as i32, true);
+        meta.push(0);
+        mb_i16(&mut meta, 0, true);
+        meta.extend_from_slice(&[0x62; 16]); // script id
+        meta.extend_from_slice(&[0x63; 16]); // type hash
+        mb_u32(&mut meta, 0, true);
+        mb_u32(&mut meta, 0, true);
+        mb_i32(&mut meta, 0, true);
+        // Objects: one class-1 object, 4 payload bytes.
+        // Object rows start 4-aligned in the metadata.
+        mb_u32(&mut meta, 1, true);
+        while !meta.len().is_multiple_of(4) {
+            meta.push(0);
+        }
+        mb_i64(&mut meta, 5, true);
+        mb_u32(&mut meta, 0, true);
+        mb_u32(&mut meta, 0, true);
+        mb_u32(&mut meta, 4, true);
+        mb_i32(&mut meta, 0, true);
+        mb_i32(&mut meta, 0, true); // script types: none
+        mb_i32(&mut meta, 0, true); // externals: none
+        let data_offset = 48 + meta.len() as u64;
+        let file_size = data_offset + 4;
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
+        out.extend_from_slice(&(file_size as u32).to_be_bytes());
+        out.extend_from_slice(&22_u32.to_be_bytes());
+        out.extend_from_slice(&(data_offset as u32).to_be_bytes());
+        out.push(0);
+        out.extend_from_slice(&[0; 3]);
+        out.extend_from_slice(&(meta.len() as u32).to_be_bytes());
+        out.extend_from_slice(&file_size.to_be_bytes());
+        out.extend_from_slice(&data_offset.to_be_bytes());
+        out.extend_from_slice(&0_i64.to_be_bytes());
+        out.extend_from_slice(&meta);
+        out.extend_from_slice(&[1, 2, 3, 4]);
+        out
+    }
+
+    #[test]
+    fn mb_census_walks_files_with_type_trees() {
+        let root = mb_temp_dir("treed");
+        fs::write(root.join("resources.assets"), mb_build_sf_treed()).unwrap();
+        let value = mb_run_census(&root);
+        let record = mb_record(&value);
+        assert_eq!(record["files_examined"], 1);
+        assert_eq!(record["files_failed"].as_array().unwrap().len(), 0);
+        assert_eq!(record["totals"]["monobehaviours"], 0);
         fs::remove_dir_all(&root).ok();
     }
 
