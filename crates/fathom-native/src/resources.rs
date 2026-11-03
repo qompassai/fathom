@@ -846,7 +846,7 @@ fn reconstruct_bmp(data: &[u8]) -> Result<(Vec<u8>, Value), String> {
 }
 
 /// The DLL-characteristics flag names set in the word.
-fn dll_characteristic_names(word: u16) -> Vec<&'static str> {
+pub fn dll_characteristic_names(word: u16) -> Vec<&'static str> {
     let flags: [(u16, &str); 9] = [
         (0x0020, "high_entropy_va"),
         (0x0040, "dynamic_base"),

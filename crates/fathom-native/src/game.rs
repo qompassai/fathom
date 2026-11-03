@@ -10,7 +10,15 @@
 //! each naming the fathom reader that censuses it), and
 //! per-class asset counts. The manifest is the shape
 //! every later programme rung extends (audio, meshes,
-//! dialogue, UI sections join it per-title).
+//! dialogue, UI sections join it per-title). The UAR
+//! adaptation (D-704) adds the runtime-framework rows
+//! (Delphi, .NET, Qt, Electron, NW.js — name markers,
+//! distinct from the engine verdict), the primary
+//! binary's PE header facts (the resource census's
+//! parser, shared), a mapping from the class vocabulary
+//! to UAR's taxonomy, and the per-kind reader-support
+//! matrix (the census/extract tools actually
+//! registered, or honest nulls).
 //!
 //! Honesty contract: a fingerprint is a name-pattern
 //! verdict, not a proof of engine — the evidence lines
@@ -139,19 +147,22 @@ fn extension_of(name: &str) -> String {
 /// manifest's per-class counts).
 fn asset_class(ext: &str) -> &'static str {
     match ext {
-        "7z" | "apk" | "asar" | "pak" | "rar" | "rgss3a" | "rpa" | "ucas" | "utoc" | "xp3"
-        | "zip" => "archive",
+        "7z" | "apk" | "asar" | "pak" | "pck" | "rar" | "rgss3a" | "rpa" | "ucas" | "utoc"
+        | "xp3" | "zip" => "archive",
         "aac" | "acb" | "aif" | "aiff" | "awb" | "bnk" | "flac" | "fsb" | "m4a" | "mp3" | "ogg"
-        | "opus" | "wav" | "wem" => "audio",
-        "csv" | "ini" | "json" | "ks" | "nani" | "rvdata" | "rvdata2" | "rxdata" | "txt"
-        | "xml" | "yaml" | "yml" => "data",
-        "appimage" | "dll" | "dylib" | "exe" | "so" => "executable",
-        "avif" | "bmp" | "gif" | "jpeg" | "jpg" | "png" | "psd" | "tga" | "webp" => "image",
+        | "opus" | "rpgmvo" | "wav" | "wem" => "audio",
+        "csv" | "ini" | "json" | "ks" | "locres" | "nani" | "rvdata" | "rvdata2" | "rxdata"
+        | "txt" | "uasset" | "ubulk" | "uexp" | "umap" | "xml" | "yaml" | "yml" => "data",
+        "appimage" | "bpl" | "dll" | "dylib" | "exe" | "so" => "executable",
+        "fnt" | "otf" | "ttf" | "woff" | "woff2" => "font",
+        "avif" | "bmp" | "ctex" | "dds" | "gif" | "jpeg" | "jpg" | "ktx" | "png" | "psd"
+        | "rpgmvp" | "stex" | "tga" | "webp" => "image",
         "blend" | "fbx" | "glb" | "gltf" | "moc3" => "model",
         "c" | "cpp" | "cs" | "gd" | "h" | "java" | "js" | "lua" | "py" | "rpy" | "rpyc" | "sh"
         | "ts" => "script",
+        "cginc" | "glsl" | "hlsl" | "shader" | "spv" | "wgsl" => "shader",
         "assets" | "bundle" | "res" | "resource" => "unity_data",
-        "avi" | "mkv" | "mov" | "mp4" | "webm" | "wmv" => "video",
+        "avi" | "bk2" | "mkv" | "mov" | "mp4" | "rpgmvm" | "usm" | "webm" | "wmv" => "video",
         _ => "other",
     }
 }
@@ -503,11 +514,271 @@ fn hex_bytes(bytes: &[u8]) -> String {
 /// one exists.
 fn container_tool(kind: &str) -> Option<&'static str> {
     match kind {
+        "data_win" => Some("inspect_gamemaker_datawin"),
         "pak" => Some("inspect_unreal_pak"),
         "pck" => Some("inspect_godot_pck"),
+        "rgss3a" => Some("inspect_rgss_archive"),
         "rpa" => Some("inspect_renpy_archive"),
+        "utoc" => Some("inspect_iostore_container"),
+        "xp3" => Some("inspect_xp3_archive"),
         _ => None,
     }
+}
+
+/// The fathom tool that extracts a container kind, if
+/// one exists.
+fn container_extract_tool(kind: &str) -> Option<&'static str> {
+    match kind {
+        "data_win" => Some("extract_gamemaker_audio"),
+        "pak" => Some("extract_unreal_pak"),
+        "rgss3a" => Some("extract_rgss_archive"),
+        "rpa" => Some("extract_renpy_archive"),
+        "xp3" => Some("extract_xp3_archive"),
+        _ => None,
+    }
+}
+
+/// Why a container kind's reader support is partial, when
+/// that needs saying next to the tool names.
+fn reader_support_note(kind: &str) -> Option<&'static str> {
+    match kind {
+        "7z" | "asar" | "rar" => {
+            Some("no fathom reader; the archive is inventoried as a file only")
+        }
+        "apk" | "zip" => {
+            Some("the game census lists the central directory inline; no standalone reader tool")
+        }
+        "data_win" => Some("extraction covers audio groups only"),
+        "pck" => {
+            Some("no standalone extract tool; the census reader verifies entry contents in place")
+        }
+        "ucas" => Some(
+            "read through its paired .utoc by inspect_iostore_container, which reports the .ucas size",
+        ),
+        "utoc" => Some("header census only; the chunk entry table is a named gap in the reader"),
+        _ => None,
+    }
+}
+
+/// The reader-support matrix for every container kind
+/// the census recognises: the census and extraction
+/// tools registered for it, or nulls where fathom has
+/// none. Tool names are the registry's, verified
+/// against the registrations, never aspirational.
+fn reader_support_rows() -> Vec<Value> {
+    const KINDS: [&str; 13] = [
+        "7z", "apk", "asar", "data_win", "pak", "pck", "rar", "rgss3a", "rpa", "ucas", "utoc",
+        "xp3", "zip",
+    ];
+    KINDS
+        .iter()
+        .map(|kind| {
+            json!({
+                "census_tool": container_tool(kind),
+                "extract_tool": container_extract_tool(kind),
+                "kind": kind,
+                "note": reader_support_note(kind),
+            })
+        })
+        .collect()
+}
+
+/// The UAR (universal-asset-ripper) category each fathom
+/// asset class maps to, or the reason no mapping exists.
+/// A mapping table, not a rename: the manifest keeps
+/// fathom's class vocabulary, and this table is where
+/// the two taxonomies are reconciled.
+fn taxonomy_rows() -> Vec<Value> {
+    const ROWS: [(&str, Option<&str>, &str); 12] = [
+        (
+            "archive",
+            None,
+            "containers are inventoried per kind in reader_support; UAR has no archive class",
+        ),
+        ("audio", Some("audio"), "direct counterpart"),
+        (
+            "data",
+            Some("manifests"),
+            "structured data and Unreal package sidecars; manifests is the nearest UAR category",
+        ),
+        (
+            "executable",
+            None,
+            "binaries are fingerprinted (primary_binary, frameworks), not ripped as assets",
+        ),
+        ("font", Some("fonts"), "direct counterpart"),
+        ("image", Some("textures"), "UAR files images under textures"),
+        ("model", Some("meshes"), "UAR files models under meshes"),
+        (
+            "other",
+            None,
+            "unclassified extensions; no honest UAR counterpart",
+        ),
+        ("script", Some("scripts"), "direct counterpart"),
+        ("shader", Some("shaders"), "direct counterpart"),
+        (
+            "unity_data",
+            Some("scenes"),
+            "Unity serialized data holds scene and asset payloads; scenes is the nearest UAR category",
+        ),
+        ("video", Some("videos"), "direct counterpart"),
+    ];
+    ROWS.iter()
+        .map(|(class, uar_category, note)| {
+            json!({"class": class, "note": note, "uar_category": uar_category})
+        })
+        .collect()
+}
+
+/// Runtime-framework evidence from walked file names
+/// (lowercased relative paths): the frameworks a game
+/// binary depends on, distinct from its engine. Each
+/// row carries the strongest single marker found;
+/// strength follows the engine fingerprint's scale.
+fn detect_frameworks(files: &[String]) -> Vec<Value> {
+    let mut best: BTreeMap<&'static str, (u32, String)> = BTreeMap::new();
+    let mut offer = |name: &'static str, strength: u32, evidence: String| {
+        let entry = best.entry(name).or_insert((0, String::new()));
+        if strength > entry.0 {
+            *entry = (strength, evidence);
+        }
+    };
+    for file in files {
+        let name = file.rsplit('/').next().unwrap_or(file);
+        match name {
+            "app.asar" => offer(
+                "electron",
+                70,
+                "Electron application archive app.asar present".to_string(),
+            ),
+            "borlndmm.dll" => offer(
+                "delphi",
+                80,
+                "Delphi/C++Builder memory manager borlndmm.dll present".to_string(),
+            ),
+            "coreclr.dll" | "hostfxr.dll" => {
+                offer("dotnet", 90, format!(".NET runtime library {name} present"))
+            }
+            "nw.dll" => offer(
+                "nwjs",
+                70,
+                "NW.js runtime library nw.dll present".to_string(),
+            ),
+            "qt5core.dll" | "qt6core.dll" | "libqt5core.so" | "libqt6core.so" => {
+                offer("qt", 80, format!("Qt core library {name} present"))
+            }
+            "qwindows.dll" if file.contains("platforms/") => offer(
+                "qt",
+                60,
+                "Qt Windows platform plugin platforms/qwindows.dll present".to_string(),
+            ),
+            _ => {}
+        }
+        if name.ends_with(".bpl") {
+            offer(
+                "delphi",
+                70,
+                format!("Delphi runtime package {name} present"),
+            );
+        }
+        if name.ends_with(".deps.json") || name.ends_with(".runtimeconfig.json") {
+            offer(
+                "dotnet",
+                70,
+                format!(".NET application manifest {name} present"),
+            );
+        }
+        if name.starts_with("libqt5core.so.") || name.starts_with("libqt6core.so.") {
+            offer("qt", 80, format!("Qt core library {name} present"));
+        }
+    }
+    best.iter()
+        .map(|(name, (strength, evidence))| {
+            json!({"evidence": evidence, "name": name, "strength": strength})
+        })
+        .collect()
+}
+
+/// The largest primary binary the census reads into
+/// memory for its PE header facts.
+const PRIMARY_BINARY_PARSE_MAX: u64 = 536_870_912;
+
+/// PE header facts for one binary (the PE parse is the
+/// resource census's, shared not duplicated), or the
+/// read/parse failure as a fact row — a file named .exe
+/// is not always a PE.
+fn pe_facts_for(path: &Path, rel: &str, bytes: u64) -> Value {
+    if bytes > PRIMARY_BINARY_PARSE_MAX {
+        return json!({
+            "bytes": bytes,
+            "note": "primary binary exceeds the in-memory parse bound; its header was not read",
+            "path": rel,
+        });
+    }
+    let data = match std::fs::read(path) {
+        Ok(data) => data,
+        Err(error) => {
+            return json!({
+                "bytes": bytes,
+                "note": format!("primary binary could not be read: {error}"),
+                "path": rel,
+            });
+        }
+    };
+    match crate::resources::parse_pe(&data) {
+        Ok(head) => {
+            let mut max_entropy: f64 = 0.0;
+            for section in &head.sections {
+                if section.raw_size == 0 {
+                    continue;
+                }
+                let start = section.raw_pointer as usize;
+                let end = start.saturating_add(section.raw_size as usize);
+                if end <= data.len() {
+                    let entropy = crate::resources::shannon_entropy(&data[start..end]);
+                    if entropy > max_entropy {
+                        max_entropy = entropy;
+                    }
+                }
+            }
+            json!({
+                "arch": head.arch(),
+                "bytes": bytes,
+                "dll_characteristics": crate::resources::dll_characteristic_names(head.dll_characteristics),
+                "dotnet": head.dotnet,
+                "entropy_basis": "maximum per-section Shannon entropy of raw section bytes; >= 7.2 flags packed or encrypted content as a heuristic, not a verdict",
+                "machine": format!("0x{:04x}", head.machine),
+                "max_section_entropy": (max_entropy * 100.0).round() / 100.0,
+                "packed_or_encrypted_suspected": max_entropy >= 7.2,
+                "path": rel,
+                "sections": head.sections.len(),
+                "subsystem": head.subsystem,
+            })
+        }
+        Err(error) => json!({
+            "bytes": bytes,
+            "parse_error": error.message,
+            "path": rel,
+        }),
+    }
+}
+
+/// The primary binary of a game tree: the executable
+/// whose stem matches the tree's root name when there
+/// is one, else the largest executable.
+fn primary_binary_facts(root: &Path, files: &[WalkedFile], root_name: &str) -> Option<Value> {
+    let exes: Vec<&WalkedFile> = files.iter().filter(|file| file.ext == "exe").collect();
+    let wanted = format!("{}.exe", root_name.to_lowercase());
+    let chosen = exes
+        .iter()
+        .find(|file| file.name == wanted)
+        .copied()
+        .or_else(|| exes.iter().max_by_key(|file| file.bytes).copied())?;
+    Some(pe_facts_for(
+        &root.join(&chosen.rel),
+        &chosen.rel,
+        chosen.bytes,
+    ))
 }
 
 /// The container kind a walked file represents, if any.
@@ -517,6 +788,7 @@ fn container_kind(file: &WalkedFile) -> Option<&'static str> {
         "apk" => Some("apk"),
         "asar" => Some("asar"),
         "pak" => Some("pak"),
+        "pck" => Some("pck"),
         "rar" => Some("rar"),
         "rgss3a" => Some("rgss3a"),
         "rpa" => Some("rpa"),
@@ -615,81 +887,81 @@ pub fn census_game_tree(
     let mut unknowns: Vec<(String, String)> = Vec::new();
     let mut classes: BTreeMap<&'static str, (usize, u64)> = BTreeMap::new();
     let mut containers: Vec<Value> = Vec::new();
-    let (fp_files, fp_dirs, total_files, total_bytes, walk_facts, encrypted_media) = if metadata
-        .is_dir()
-    {
-        let walk = walk_tree(&target);
-        if walk.capped {
-            unknowns.push((
+    let (fp_files, fp_dirs, total_files, total_bytes, walk_facts, encrypted_media, walked) =
+        if metadata.is_dir() {
+            let walk = walk_tree(&target);
+            if walk.capped {
+                unknowns.push((
                 "walk coverage".to_string(),
                 format!(
                     "the tree walk stopped at a bound (GAME_WALK_FILES_MAX {GAME_WALK_FILES_MAX} files / depth {GAME_WALK_DEPTH_MAX}); counts are a floor, not a total"
                 ),
             ));
-        }
-        if walk.unreadable > 0 {
-            unknowns.push((
-                "unreadable entries".to_string(),
-                format!(
-                    "{} directory entries could not be read and are uncounted",
-                    walk.unreadable
-                ),
-            ));
-        }
-        for file in &walk.files {
-            let entry = classes.entry(asset_class(&file.ext)).or_default();
-            entry.0 += 1;
-            entry.1 += file.bytes;
-            if let Some(kind) = container_kind(file) {
-                containers.push(json!({
-                    "bytes": file.bytes,
-                    "census_tool": container_tool(kind),
-                    "kind": kind,
-                    "path": file.rel,
-                    "sha256": sha256_file(&target.join(&file.rel)),
-                }));
             }
-        }
-        (
-            walk.files
-                .iter()
-                .map(|f| f.rel.to_lowercase())
-                .collect::<Vec<_>>(),
-            walk.dirs
-                .iter()
-                .map(|d| d.to_lowercase())
-                .collect::<Vec<_>>(),
-            walk.files.len(),
-            walk.files.iter().map(|f| f.bytes).sum::<u64>(),
-            Some(json!({
-                "capped": walk.capped,
-                "files": walk.files.len(),
-                "unreadable": walk.unreadable,
-            })),
-            encrypted_media_facts(&target, &walk.files),
-        )
-    } else {
-        // Bare file target: a container in its own
-        // right; zip-family files also fingerprint from
-        // their central-directory names.
-        let ext = extension_of(&target_name);
-        let kind = match ext.as_str() {
-            "7z" => "7z",
-            "apk" => "apk",
-            "rar" => "rar",
-            "zip" => "zip",
-            _ => "file",
-        };
-        containers.push(json!({
-            "bytes": metadata.len(),
-            "census_tool": container_tool(kind),
-            "kind": kind,
-            "path": target_name,
-            "sha256": sha256_file(&target),
-        }));
-        let mut listing: Option<(Vec<String>, Vec<String>)> = None;
-        if kind == "zip" || kind == "apk" {
-            match zip_listing(&target) {
+            if walk.unreadable > 0 {
+                unknowns.push((
+                    "unreadable entries".to_string(),
+                    format!(
+                        "{} directory entries could not be read and are uncounted",
+                        walk.unreadable
+                    ),
+                ));
+            }
+            for file in &walk.files {
+                let entry = classes.entry(asset_class(&file.ext)).or_default();
+                entry.0 += 1;
+                entry.1 += file.bytes;
+                if let Some(kind) = container_kind(file) {
+                    containers.push(json!({
+                        "bytes": file.bytes,
+                        "census_tool": container_tool(kind),
+                        "kind": kind,
+                        "path": file.rel,
+                        "sha256": sha256_file(&target.join(&file.rel)),
+                    }));
+                }
+            }
+            (
+                walk.files
+                    .iter()
+                    .map(|f| f.rel.to_lowercase())
+                    .collect::<Vec<_>>(),
+                walk.dirs
+                    .iter()
+                    .map(|d| d.to_lowercase())
+                    .collect::<Vec<_>>(),
+                walk.files.len(),
+                walk.files.iter().map(|f| f.bytes).sum::<u64>(),
+                Some(json!({
+                    "capped": walk.capped,
+                    "files": walk.files.len(),
+                    "unreadable": walk.unreadable,
+                })),
+                encrypted_media_facts(&target, &walk.files),
+                walk.files,
+            )
+        } else {
+            // Bare file target: a container in its own
+            // right; zip-family files also fingerprint from
+            // their central-directory names.
+            let ext = extension_of(&target_name);
+            let kind = match ext.as_str() {
+                "7z" => "7z",
+                "apk" => "apk",
+                "rar" => "rar",
+                "zip" => "zip",
+                _ => "file",
+            };
+            containers.push(json!({
+                "bytes": metadata.len(),
+                "census_tool": container_tool(kind),
+                "kind": kind,
+                "path": target_name,
+                "sha256": sha256_file(&target),
+            }));
+            let mut listing: Option<(Vec<String>, Vec<String>)> = None;
+            if kind == "zip" || kind == "apk" {
+                match zip_listing(&target) {
                 Some((files, dirs)) => {
                     if let Some(row) = containers.last_mut() {
                         row["entries"] = json!(files.len());
@@ -707,22 +979,30 @@ pub fn census_game_tree(
                     "the zip central directory could not be read; the engine verdict rests on the file alone".to_string(),
                 )),
             }
-        } else if kind == "rar" || kind == "7z" {
-            unknowns.push((
+            } else if kind == "rar" || kind == "7z" {
+                unknowns.push((
                 "archive listing".to_string(),
                 format!(
                     "fathom has no {kind} listing reader; the engine is unrecorded until the archive is extracted"
                 ),
             ));
-        }
-        match listing {
-            Some((files, dirs)) => {
-                let total = files.len();
-                (files, dirs, total, metadata.len(), None, None)
             }
-            None => (Vec::new(), Vec::new(), 1, metadata.len(), None, None),
-        }
-    };
+            match listing {
+                Some((files, dirs)) => {
+                    let total = files.len();
+                    (files, dirs, total, metadata.len(), None, None, Vec::new())
+                }
+                None => (
+                    Vec::new(),
+                    Vec::new(),
+                    1,
+                    metadata.len(),
+                    None,
+                    None,
+                    Vec::new(),
+                ),
+            }
+        };
 
     let (winner, evidence, also_detected) = fingerprint(&fp_files, &fp_dirs);
     let (engine, variant) = match &winner {
@@ -734,6 +1014,14 @@ pub fn census_game_tree(
             ));
             ("unknown", "unknown")
         }
+    };
+    let frameworks = detect_frameworks(&fp_files);
+    let primary_binary = if metadata.is_dir() {
+        primary_binary_facts(&target, &walked, &target_name)
+    } else if extension_of(&target_name) == "exe" || extension_of(&target_name) == "dll" {
+        Some(pe_facts_for(&target, &target_name, metadata.len()))
+    } else {
+        None
     };
     let class_rows: Vec<Value> = classes
         .iter()
@@ -752,7 +1040,11 @@ pub fn census_game_tree(
             "variant": variant,
         },
         "files": {"bytes": total_bytes, "total": total_files},
+        "frameworks": frameworks,
+        "primary_binary": primary_binary,
+        "reader_support": reader_support_rows(),
         "root": target_name,
+        "taxonomy": taxonomy_rows(),
         "ui": Value::Null,
         "walk": walk_facts,
     });
@@ -1271,6 +1563,176 @@ mod tests {
         assert_eq!(media["system_json"]["has_encrypted_images"], true);
         // The key VALUE must never be recorded.
         assert!(!format!("{media}").contains("d41d8cd9"));
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// Minimal PE32+ with one `.text` section whose raw
+    /// bytes come from `fill`, for primary-binary facts.
+    fn build_pe(fill: &dyn Fn(usize) -> u8, raw_len: usize) -> Vec<u8> {
+        let mut out = vec![0_u8; 0x400];
+        out[0..2].copy_from_slice(b"MZ");
+        out[0x3c..0x40].copy_from_slice(&128_u32.to_le_bytes());
+        out[128..132].copy_from_slice(b"PE\0\0");
+        let coff = 132;
+        out[coff..coff + 2].copy_from_slice(&0x8664_u16.to_le_bytes());
+        out[coff + 2..coff + 4].copy_from_slice(&1_u16.to_le_bytes());
+        out[coff + 16..coff + 18].copy_from_slice(&240_u16.to_le_bytes());
+        let opt = coff + 20;
+        out[opt..opt + 2].copy_from_slice(&0x20b_u16.to_le_bytes());
+        out[opt + 68..opt + 70].copy_from_slice(&2_u16.to_le_bytes());
+        out[opt + 108..opt + 112].copy_from_slice(&16_u32.to_le_bytes());
+        let sections = opt + 240;
+        out[sections..sections + 8].copy_from_slice(b".text\0\0\0");
+        out[sections + 8..sections + 12].copy_from_slice(&(raw_len as u32).to_le_bytes());
+        out[sections + 12..sections + 16].copy_from_slice(&0x1000_u32.to_le_bytes());
+        out[sections + 16..sections + 20].copy_from_slice(&(raw_len as u32).to_le_bytes());
+        out[sections + 20..sections + 24].copy_from_slice(&0x400_u32.to_le_bytes());
+        out.resize(0x400 + raw_len, 0);
+        for index in 0..raw_len {
+            out[0x400 + index] = fill(index);
+        }
+        out
+    }
+
+    #[test]
+    fn validation_frameworks_and_primary_binary() {
+        let (root, result) = run_game(
+            "frameworks",
+            &[
+                (
+                    "game.exe",
+                    build_pe(
+                        &|i| {
+                            let x = (i as u32)
+                                .wrapping_mul(1_664_525)
+                                .wrapping_add(1_013_904_223);
+                            (x >> 24) as u8
+                        },
+                        8192,
+                    ),
+                ),
+                ("borlndmm.dll", b"x".to_vec()),
+                ("coreclr.dll", b"x".to_vec()),
+                ("Qt6Core.dll", b"x".to_vec()),
+                ("app.asar", b"x".to_vec()),
+            ],
+        );
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        let frameworks = manifest["frameworks"].as_array().unwrap();
+        let names: Vec<&str> = frameworks
+            .iter()
+            .map(|row| row["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["delphi", "dotnet", "electron", "qt"]);
+        let primary = &manifest["primary_binary"];
+        assert_eq!(primary["path"], "game.exe");
+        assert_eq!(primary["arch"], "x86_64");
+        assert_eq!(primary["dotnet"], false);
+        assert_eq!(primary["packed_or_encrypted_suspected"], true);
+        assert!(primary["max_section_entropy"].as_f64().unwrap() >= 7.2);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_primary_binary_low_entropy_not_flagged() {
+        let (root, result) = run_game(
+            "primary-low-entropy",
+            &[("game.exe", build_pe(&|_| 0, 8192))],
+        );
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        let primary = &manifest["primary_binary"];
+        assert_eq!(primary["packed_or_encrypted_suspected"], false);
+        assert_eq!(primary["max_section_entropy"], 0.0);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_taxonomy_and_reader_support() {
+        let (root, result) = run_game("taxonomy", &[("a.png", b"x".to_vec())]);
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        let taxonomy = manifest["taxonomy"].as_array().unwrap();
+        assert_eq!(taxonomy.len(), 12);
+        let category = |class: &str| {
+            taxonomy.iter().find(|row| row["class"] == class).unwrap()["uar_category"].clone()
+        };
+        assert_eq!(category("image"), "textures");
+        assert_eq!(category("font"), "fonts");
+        assert_eq!(category("model"), "meshes");
+        assert_eq!(category("unity_data"), "scenes");
+        assert_eq!(category("archive"), Value::Null);
+        let support = manifest["reader_support"].as_array().unwrap();
+        assert_eq!(support.len(), 13);
+        let row = |kind: &str| {
+            support
+                .iter()
+                .find(|row| row["kind"] == kind)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(row("pak")["census_tool"], "inspect_unreal_pak");
+        assert_eq!(row("pak")["extract_tool"], "extract_unreal_pak");
+        assert_eq!(row("7z")["census_tool"], Value::Null);
+        assert_eq!(row("7z")["extract_tool"], Value::Null);
+        assert_eq!(row("utoc")["census_tool"], "inspect_iostore_container");
+        assert_eq!(row("utoc")["extract_tool"], Value::Null);
+        assert_eq!(row("rgss3a")["extract_tool"], "extract_rgss_archive");
+        assert_eq!(row("data_win")["census_tool"], "inspect_gamemaker_datawin");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_new_asset_classes_and_pck_container() {
+        let (root, result) = run_game(
+            "new-classes",
+            &[
+                ("font.ttf", b"x".to_vec()),
+                ("effect.glsl", b"x".to_vec()),
+                ("game.pck", b"GDPC".to_vec()),
+                ("tex.ctex", b"x".to_vec()),
+                ("snd.rpgmvo", b"x".to_vec()),
+                ("pic.rpgmvp", b"RPGMV".to_vec()),
+            ],
+        );
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        let count = |class: &str| {
+            manifest["asset_classes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["class"] == class)
+                .map(|row| row["count"].as_u64().unwrap())
+        };
+        assert_eq!(count("font"), Some(1));
+        assert_eq!(count("shader"), Some(1));
+        assert_eq!(count("archive"), Some(1));
+        assert_eq!(count("image"), Some(2));
+        assert_eq!(count("audio"), Some(1));
+        let containers = manifest["containers"].as_array().unwrap();
+        let pck = containers.iter().find(|row| row["kind"] == "pck").unwrap();
+        assert_eq!(pck["census_tool"], "inspect_godot_pck");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_fake_exe_is_a_parse_error_row() {
+        let (root, result) = run_game("fake-exe", &[("game.exe", b"not a pe at all".to_vec())]);
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        assert!(manifest["primary_binary"]["parse_error"].is_string());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_no_exe_no_primary_binary() {
+        let (root, result) = run_game("no-exe", &[("a.png", b"x".to_vec())]);
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        assert_eq!(manifest["primary_binary"], Value::Null);
+        assert_eq!(manifest["frameworks"].as_array().unwrap().len(), 0);
         fs::remove_dir_all(&root).ok();
     }
 }
