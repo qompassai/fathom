@@ -13,7 +13,7 @@
     {
       "registryType": "mcpb",
       "identifier": "https://github.com/qompassai/fathom/releases/download/v1.0.0/fathom-mcp-1.0.0-linux-x64.mcpb",
-      "fileSha256": "31e6127f1c9fdeccf43bb95073e201ecc6f6959caab64c05a7ba915f5e8bbe19",
+      "fileSha256": "a01454ac8ac89a61c03d01da22ae6168cf4c0057d940a22766c931ae8fa6fdc1",
       "transport": {
         "type": "stdio"
       }
