@@ -30,6 +30,7 @@ pub mod renpy;
 pub mod rpgmaker;
 pub mod sections;
 pub mod uasset;
+pub mod ui;
 pub mod unity;
 pub mod unreal;
 
@@ -655,6 +656,21 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::detection::extract_iocs_with_context),
+    );
+    registry.register(
+        descriptor(
+            "census_ui_tree",
+            ToolClass::Observe,
+            "ui",
+            "Census how a game tree builds its UI: Ren'Py screen \
+             definitions with widget structure from .rpy sources, the \
+             RPG Maker plugin list (js/plugins.js) plus Window_*/ \
+             Sprite_* class census, and the Electron/NW.js HTML/CSS/JS \
+             census with framework fingerprints. Unity uGUI and Unreal \
+             UMG limits are named in the evidence, not papered over",
+            target_schema(),
+        ),
+        Arc::new(ui::census_ui_tree),
     );
     registry.register(
         descriptor(
