@@ -191,7 +191,10 @@ pub const OUTPUT_BYTES_MAX: usize = 8_388_608;
 pub const PAGE_LIMIT_MAX: usize = 20_000;
 
 /// Declared entries in one Unreal pak index (readers SPEC §2.3).
-pub const PAK_ENTRIES_MAX: usize = 100_000;
+/// Corpus-sized: the Projekt Melody alpha pak declares 250,024
+/// entries (D-695); the bound sits above it with headroom, and a
+/// pak past it refuses by name rather than truncating.
+pub const PAK_ENTRIES_MAX: usize = 300_000;
 
 /// Entries retained from one Godot PCK archive listing.
 pub const PCK_ENTRIES_MAX: usize = 100_000;
