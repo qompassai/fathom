@@ -889,6 +889,7 @@ mod tests {
             Config {
                 allow_programs: Vec::new(),
                 allow_tools: tools.iter().map(ToString::to_string).collect(),
+                blender_program: None,
                 ghidra_headless: None,
                 http_bind: "127.0.0.1:8731".parse().unwrap(),
                 signing_key_file: None,
