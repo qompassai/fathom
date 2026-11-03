@@ -157,17 +157,15 @@ fn walk_commands(
 /// Locate the data directory under a game root:
 /// <root>/data, <root>/www/data, or the root itself.
 fn locate_data_dir(root: &Path) -> Option<PathBuf> {
-    for candidate in [
+    [
         root.join("data"),
         root.join("www").join("data"),
         root.to_path_buf(),
-    ] {
-        if candidate.join("System.json").is_file() || candidate.join("CommonEvents.json").is_file()
-        {
-            return Some(candidate);
-        }
-    }
-    None
+    ]
+    .into_iter()
+    .find(|candidate| {
+        candidate.join("System.json").is_file() || candidate.join("CommonEvents.json").is_file()
+    })
 }
 
 pub fn extract_rpgmaker_dialogue(

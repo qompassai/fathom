@@ -397,8 +397,10 @@ fn m4a_facts(head: &[u8]) -> AudioFacts {
 /// FLAC facts from STREAMINFO (34 bytes at offset 42
 /// in the canonical layout; searched, not assumed).
 fn flac_facts(head: &[u8]) -> AudioFacts {
-    let mut facts = AudioFacts::default();
-    facts.codec = Some("flac".to_string());
+    let mut facts = AudioFacts {
+        codec: Some("flac".to_string()),
+        ..AudioFacts::default()
+    };
     // The first metadata block follows "fLaC": block
     // header (4) then STREAMINFO. Sample rate is 20
     // bits at STREAMINFO+10, channels 3 bits, total
