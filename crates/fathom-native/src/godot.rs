@@ -757,7 +757,7 @@ pub fn inspect_godot_pck(
     let mut evidence = Evidence::new("inspect_godot_pck", "godot");
     evidence.subject = Some(subject);
     if archive.directory_encrypted && !archive.directory_decrypted {
-        let record = pack_record(&archive, 0, 0, 0, 0, 0, 0, 0, 0);
+        let record = pack_record(&archive, &PackCounts::default());
         let document = json!({
             "godot_pck": record.clone(),
             "godot_pck_entries": [],
@@ -835,14 +835,16 @@ pub fn inspect_godot_pck(
     }
     let record = pack_record(
         &archive,
-        delta_count,
-        encrypted_count,
-        mismatch_paths.len() as u64,
-        overrun_paths.len() as u64,
-        removal_count,
-        verified_count,
-        decrypted_count,
-        decryption_failed_count,
+        &PackCounts {
+            decrypted_entries: decrypted_count,
+            decryption_failed_entries: decryption_failed_count,
+            delta_entries: delta_count,
+            encrypted_entries: encrypted_count,
+            md5_mismatch_entries: mismatch_paths.len() as u64,
+            removal_entries: removal_count,
+            unreadable_entries: overrun_paths.len() as u64,
+            verified_entries: verified_count,
+        },
     );
     // Retention (readers SPEC §2.5): the census document is
     // the envelope's rows plus their locator keys, keyed to
@@ -1078,17 +1080,20 @@ fn entry_row(
 /// record is what the retained census document carries
 /// (readers SPEC §2.5); the envelope finding adds the export
 /// digest to it.
-fn pack_record(
-    archive: &PckArchive,
+/// The per-outcome entry counts a pack record reports.
+#[derive(Default)]
+struct PackCounts {
+    decrypted_entries: u64,
+    decryption_failed_entries: u64,
     delta_entries: u64,
     encrypted_entries: u64,
     md5_mismatch_entries: u64,
-    unreadable_entries: u64,
     removal_entries: u64,
+    unreadable_entries: u64,
     verified_entries: u64,
-    decrypted_entries: u64,
-    decryption_failed_entries: u64,
-) -> Value {
+}
+
+fn pack_record(archive: &PckArchive, counts: &PackCounts) -> Value {
     let total_file_bytes: u64 = archive
         .entries
         .iter()
@@ -1097,27 +1102,27 @@ fn pack_record(
         .sum();
     json!({
         "declared_entries": archive.entries.len(),
-        "decrypted_entries": decrypted_entries,
-        "decryption_failed_entries": decryption_failed_entries,
-        "delta_entries": delta_entries,
+        "decrypted_entries": counts.decrypted_entries,
+        "decryption_failed_entries": counts.decryption_failed_entries,
+        "delta_entries": counts.delta_entries,
         "directory_decrypted": archive.directory_decrypted,
         "directory_encrypted": archive.directory_encrypted,
         "directory_offset": archive.directory_offset,
         "directory_salt": archive.directory_salt,
-        "encrypted_entries": encrypted_entries,
+        "encrypted_entries": counts.encrypted_entries,
         "engine_major": archive.engine_major,
         "engine_minor": archive.engine_minor,
         "engine_patch": archive.engine_patch,
         "file_base": archive.file_base,
         "format_version": archive.format_version,
-        "md5_mismatch_entries": md5_mismatch_entries,
+        "md5_mismatch_entries": counts.md5_mismatch_entries,
         "pack_flags": archive.pack_flags,
         "relative_base": archive.pack_flags & PACK_FLAG_RELATIVE_BASE != 0,
-        "removal_entries": removal_entries,
+        "removal_entries": counts.removal_entries,
         "sparse_bundle": archive.sparse_bundle,
         "total_file_bytes": total_file_bytes,
-        "unreadable_entries": unreadable_entries,
-        "verified_entries": verified_entries,
+        "unreadable_entries": counts.unreadable_entries,
+        "verified_entries": counts.verified_entries,
     })
 }
 
