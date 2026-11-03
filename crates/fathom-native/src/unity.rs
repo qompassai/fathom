@@ -1899,7 +1899,7 @@ mod tests {
             }
         }
         body.extend_from_slice(&3_u32.to_le_bytes()); // object count
-        while body.len() % 4 != 0 {
+        while !body.len().is_multiple_of(4) {
             body.push(0); // object rows start 4-aligned
         }
         for i in 0..3_i64 {
@@ -1964,7 +1964,7 @@ mod tests {
             body.extend_from_slice(&0_i32.to_le_bytes()); // type dependencies
         }
         body.extend_from_slice(&5_u32.to_le_bytes());
-        while body.len() % 4 != 0 {
+        while !body.len().is_multiple_of(4) {
             body.push(0); // object rows start 4-aligned
         }
         for i in 0..5_i64 {
@@ -2519,7 +2519,7 @@ mod tests {
         text_asset.extend_from_slice(&[0, 0, 0]); // align 13 -> 16
         text_asset.extend_from_slice(&(script.len() as i32).to_le_bytes());
         text_asset.extend_from_slice(&script);
-        while text_asset.len() % 4 != 0 {
+        while !text_asset.len().is_multiple_of(4) {
             text_asset.push(0);
         }
         let mut texture = Vec::new();
@@ -2552,17 +2552,17 @@ mod tests {
         meta.extend(std::iter::repeat_n(0xAB_u8, 16)); // script id
         meta.extend(std::iter::repeat_n(0xCD_u8, 16)); // type hash
         meta.extend_from_slice(&3_u32.to_le_bytes()); // object count
-        while meta.len() % 4 != 0 {
+        while !meta.len().is_multiple_of(4) {
             meta.push(0); // object rows start 4-aligned
         }
         let sizes = [text_asset.len(), texture.len(), mono.len()];
         let mut start = 0_u32;
-        for index in 0..3 {
+        for (index, size) in sizes.iter().enumerate() {
             meta.extend_from_slice(&(index as i64 + 1).to_le_bytes()); // path_id
             meta.extend_from_slice(&start.to_le_bytes());
-            meta.extend_from_slice(&(sizes[index] as u32).to_le_bytes());
+            meta.extend_from_slice(&(*size as u32).to_le_bytes());
             meta.extend_from_slice(&(index as i32).to_le_bytes()); // type_index
-            start += sizes[index] as u32;
+            start += *size as u32;
         }
         let data_offset = 20 + meta.len();
         let total = data_offset + sizes.iter().sum::<usize>();
