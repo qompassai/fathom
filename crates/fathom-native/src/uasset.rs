@@ -146,7 +146,9 @@ impl<'a> Cursor<'a> {
             let slice = self.bytes.get(self.pos..end).ok_or_else(bad)?;
             self.pos = end;
             let words: Vec<u16> = slice
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                 .collect();
             let text = String::from_utf16(&words).map_err(|_| bad())?;

@@ -1058,10 +1058,10 @@ fn write_payload(
     use sha2::{Digest as _, Sha256};
     let mut hasher = Sha256::new();
     let mut produced: u64 = 0;
-    let mut sink = |chunk: &[u8],
-                    hasher: &mut Sha256,
-                    produced: &mut u64,
-                    out_file: &mut File|
+    let sink = |chunk: &[u8],
+                hasher: &mut Sha256,
+                produced: &mut u64,
+                out_file: &mut File|
      -> Result<(), FathomError> {
         out_file.write_all(chunk).map_err(|error| {
             FathomError::new(

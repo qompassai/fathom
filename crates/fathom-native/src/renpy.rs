@@ -686,10 +686,11 @@ fn sha256_range(file: &mut File, file_len: u64, offset: u64, count: u64) -> Opti
     Some(hex_bytes(&hasher.finalize()))
 }
 
-fn parse_archive(
-    file: &mut File,
-    file_len: u64,
-) -> Result<(Header, Vec<(String, Vec<Segment>)>, usize), FathomError> {
+/// A parsed RPA archive: header, (path, segments)
+/// files, and the decompressed index size.
+type ParsedArchive = (Header, Vec<(String, Vec<Segment>)>, usize);
+
+fn parse_archive(file: &mut File, file_len: u64) -> Result<ParsedArchive, FathomError> {
     // Header: one line within the first 4 KiB.
     let head_len = usize::try_from(file_len.min(HEADER_LINE_MAX as u64)).unwrap_or(0);
     let mut head = vec![0_u8; head_len];
@@ -765,10 +766,9 @@ pub fn inspect_renpy_archive(
             format!("cannot open target: {error}"),
         )
     })?;
-    /// Parse an RPA archive's header and index into the
-    /// shaped (path, segments) list both the census and the
-    /// extractor consume. Returns the header, the files, and
-    /// the decompressed index size.
+    // Parse the archive's header and index into the
+    // shaped (path, segments) list both the census and
+    // the extractor consume.
     let (header, files, index_bytes_len) = parse_archive(&mut file, file_len)?;
     let segment_total: usize = files.iter().map(|(_, segs)| segs.len()).sum();
     let mut rows: Vec<Value> = Vec::with_capacity(segment_total);

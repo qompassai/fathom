@@ -220,10 +220,10 @@ fn parse_v3(file: &mut File, file_len: u64) -> Result<Vec<Entry>, FathomError> {
         }
         // The directory ends where the first entry's
         // data begins.
-        if let Some(first) = entries.first() {
-            if position >= first.offset {
-                break;
-            }
+        if let Some(first) = entries.first()
+            && position >= first.offset
+        {
+            break;
         }
         if position >= file_len {
             return Err(mismatch("rgss version 3 directory runs past the archive"));
