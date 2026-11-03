@@ -1238,8 +1238,19 @@ pub fn register(registry: &mut Registry) {
             "godot",
             "Godot PCK archive inventory: header, directory entries with \
              content hashes and MD5 cross-checks; encrypted, sparse, and \
-             unreadable entries are explicit unknowns",
-            target_schema(),
+             unreadable entries are explicit unknowns. With the optional \
+             encryption_key (the 64-hex script encryption key), encrypted \
+             directories and entries are decrypted and verified; texture \
+             entries (.ctex/.stex) carry their PNG/WebP payload facts",
+            target_and(
+                json!({
+                    "encryption_key": {
+                        "type": "string",
+                        "description": "Optional Godot script encryption key: 64 hexadecimal characters (0x prefix accepted)",
+                    },
+                }),
+                &[],
+            ),
         ),
         Arc::new(godot::inspect_godot_pck),
     );
