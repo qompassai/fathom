@@ -611,6 +611,7 @@ name = "fathom-native"
 version = "1.0.0"
 dependencies = [
  "fathom-core",
+ "fathom-managed",
  "flate2",
  "goblin",
  "lz4_flex",
