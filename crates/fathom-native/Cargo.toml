@@ -8,6 +8,7 @@ description = "fathom native-binary provider: Ghidra headless analysis, artifact
 
 [dependencies]
 fathom-core = { version = "1.0.0", path = "../fathom-core" }
+fathom-managed = { version = "1.0.0", path = "../fathom-managed" }
 flate2.workspace = true
 goblin = "0.10"
 lz4_flex.workspace = true
