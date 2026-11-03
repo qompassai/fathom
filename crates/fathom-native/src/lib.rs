@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod artifact;
+pub mod audio;
 pub mod beam;
 pub mod cubism;
 pub mod engine;
@@ -280,6 +281,20 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::binary_overview),
+    );
+    registry.register(
+        descriptor(
+            "census_audio_tree",
+            ToolClass::Observe,
+            "audio",
+            "Census the audio files of a game tree (or one file): codec, \
+             channels, sample rate, and duration from headers only \
+             (WAV, Ogg Vorbis/Opus, MP3, M4A, FLAC), with voice/SFX/music \
+             categorisation from the game's own path vocabulary. Nothing \
+             is decoded or played",
+            target_schema(),
+        ),
+        Arc::new(audio::census_audio_tree),
     );
     registry.register(
         descriptor(
