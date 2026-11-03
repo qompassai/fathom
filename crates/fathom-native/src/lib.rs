@@ -23,6 +23,7 @@ pub mod godot;
 pub mod gpu;
 pub mod il2cpp;
 pub mod iostore;
+pub mod keyhunt;
 pub mod kirikiri;
 pub mod layout;
 pub mod mesh;
@@ -1865,6 +1866,26 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::write::rename_variable),
+    );
+    registry.register(
+        descriptor(
+            "scan_key_candidates",
+            ToolClass::Read,
+            "unreal",
+            "Hunt AES-256 key candidates in a binary: sliding-window entropy \
+             candidates with false-positive filters, ranked with AES S-box \
+             proximity; with pak_target, candidates are verified against the \
+             pak and only a candidate that actually decrypts it is reported \
+             VERIFIED. Rows carry SHA-256 fingerprints, never key bytes",
+            target_and(
+                json!({
+                    "limit": {"type": "integer", "minimum": 1, "description": "Maximum candidate rows returned (default 32); verified rows always return"},
+                    "pak_target": {"type": "string", "description": "Optional pak under a configured target root to verify candidates against"},
+                }),
+                &[],
+            ),
+        ),
+        Arc::new(keyhunt::scan_key_candidates),
     );
     registry.register(
         descriptor(
