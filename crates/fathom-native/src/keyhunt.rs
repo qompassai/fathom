@@ -150,7 +150,7 @@ pub fn scan_key_candidates(
     let mut counts = [0_u32; 256];
     let mut distinct = 0_usize;
     let mut sum: f64 = 0.0;
-    let mut adjust =
+    let adjust =
         |counts: &mut [u32; 256], distinct: &mut usize, sum: &mut f64, byte: u8, delta: i32| {
             let slot = &mut counts[byte as usize];
             *sum -= terms[*slot as usize];
