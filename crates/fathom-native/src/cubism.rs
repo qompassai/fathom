@@ -22,7 +22,17 @@
 //! validates, parent parts are recorded as unrecorded.
 //! Drawable draw order has no static array in the shipped
 //! format that this reader can attribute, so it is never
-//! reported. A model directory without `.model3.json`
+//! reported.
+//!
+//! Content census (R8): `.exp3.json` parameter values and
+//! blends, `.motion3.json` curve facts, and the
+//! `.physics3.json` document are censused as content, not
+//! just references. The physics3 document is carried
+//! **verbatim** (the full parsed JSON) in the retained
+//! census document: physics is the leakiest mapping seam
+//! downstream (multi-input blends, normalization, non-tip
+//! outputs), so no field is summarized away at this
+//! layer. A model directory without `.model3.json`
 //! censuses the binary alone and states that group bindings
 //! are unrecorded — several shipped games drive blink and
 //! gaze by parameter name and ship no group record at all.
@@ -411,14 +421,102 @@ fn load_expressions(listing: &[(String, PathBuf)]) -> Result<Vec<Value>, FathomE
             })
             .cloned()
             .collect();
+        let parameter_values: Vec<Value> = document["Parameters"]
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|item| {
+                        json!({
+                            "blend": item["Blend"],
+                            "id": item["Id"],
+                            "value": item["Value"],
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         expressions.push(json!({
             "eye_parameters": eye_parameters,
             "file": relative,
+            "parameter_values": parameter_values,
             "parameters": parameters,
             "type": document["Type"],
         }));
     }
     Ok(expressions)
+}
+
+/// Load the model's `.physics3.json` content when one
+/// is in the directory: the document **verbatim** plus
+/// a structural summary (settings, per-setting vertex /
+/// input / output counts). The raw document is the
+/// jiggle-parameter source for downstream rig mapping;
+/// nothing in it is summarized away.
+fn load_physics3(listing: &[(String, PathBuf)]) -> Result<Option<Value>, FathomError> {
+    let Some((relative, path)) = find_in_listing(listing, ".physics3.json").first() else {
+        return Ok(None);
+    };
+    let bytes = read_bounded(path)?;
+    let document: Value = serde_json::from_slice(&bytes)
+        .map_err(|error| mismatch(format!("{relative} is not valid JSON: {error}")))?;
+    let settings: Vec<Value> = document["PhysicsSettings"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .map(|setting| {
+                    json!({
+                        "id": setting["Id"],
+                        "inputs": setting["Input"].as_array().map_or(0, Vec::len),
+                        "normalization": setting["Normalization"],
+                        "outputs": setting["Output"].as_array().map_or(0, Vec::len),
+                        "vertices": setting["Vertices"].as_array().map_or(0, Vec::len),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Some(json!({
+        "file": relative,
+        "meta": document["Meta"],
+        "raw": document,
+        "settings": settings,
+        "version": document["Version"],
+    })))
+}
+
+/// Load content facts for every `.motion3.json` in the
+/// directory: duration, fps, curve/target census from
+/// the file's own Meta and Curves records.
+fn load_motions_content(listing: &[(String, PathBuf)]) -> Result<Vec<Value>, FathomError> {
+    let mut motions: Vec<Value> = Vec::new();
+    for (relative, path) in find_in_listing(listing, ".motion3.json") {
+        let bytes = read_bounded(path)?;
+        let document: Value = serde_json::from_slice(&bytes)
+            .map_err(|error| mismatch(format!("{relative} is not valid JSON: {error}")))?;
+        let meta = &document["Meta"];
+        let mut targets: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
+        if let Some(curves) = document["Curves"].as_array() {
+            for curve in curves {
+                if let Some(target) = curve["Target"].as_str() {
+                    *targets.entry(target.to_string()).or_insert(0) += 1;
+                }
+            }
+        }
+        motions.push(json!({
+            "curve_count": meta["CurveCount"],
+            "duration": meta["Duration"],
+            "file": relative,
+            "fps": meta["Fps"],
+            "targets": targets,
+            "total_point_count": meta["TotalPointCount"],
+            "total_segment_count": meta["TotalSegmentCount"],
+            "user_data_count": meta["UserDataCount"],
+        }));
+    }
+    Ok(motions)
 }
 
 /// Little-endian u32 at a byte offset, bounds-checked.
@@ -723,6 +821,14 @@ pub fn census_cubism_model(
     let model3 = load_model3(&listing)?;
     let cdi3 = load_cdi3(&listing)?;
     let expressions = load_expressions(&listing)?;
+    let physics3 = load_physics3(&listing)?;
+    let motions_content = load_motions_content(&listing)?;
+    let physics3_settings_count = physics3
+        .as_ref()
+        .and_then(|doc| doc["settings"].as_array().map(|rows| rows.len()))
+        .unwrap_or(0);
+    let motion_content_files = motions_content.len();
+    let physics3_present = physics3.is_some();
     let moc_candidates: Vec<&(String, PathBuf)> = listing
         .iter()
         .filter(|(relative, _)| relative.to_lowercase().ends_with(".moc3"))
@@ -915,6 +1021,7 @@ pub fn census_cubism_model(
             "standard_ids_present": standard_parameters(&moc.parameters),
             "version": moc.version,
         },
+        "motions_content": motions_content,
         "model": dir
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -930,6 +1037,7 @@ pub fn census_cubism_model(
             "textures": model.textures,
             "version": model.version,
         })),
+        "physics3": physics3,
         "textures": texture_rows,
     });
     let (digest, retention_note) =
@@ -955,8 +1063,11 @@ pub fn census_cubism_model(
             "moc3_file": moc_relative,
             "model3_present": model3.is_some(),
             "parameter_count": moc.counts[5],
+            "motion_content_files": motion_content_files,
             "parameter_ranges_present": moc.parameter_ranges.is_some(),
             "parts_count": moc.counts[0],
+            "physics3_present": physics3_present,
+            "physics3_settings": physics3_settings_count,
         }),
     ));
     if let Some(note) = retention_note {
@@ -1146,6 +1257,73 @@ mod tests {
                 (0.0, 100.0, 50.0),
             ],
         )
+    }
+
+    #[test]
+    fn validation_content_census_physics_expressions_motions() {
+        let physics = json!({
+            "Version": 3,
+            "Meta": {"PhysicsSettingCount": 1, "TotalInputCount": 1, "TotalOutputCount": 1, "VertexCount": 2},
+            "PhysicsSettings": [{
+                "Id": "PhysicsSetting1",
+                "Input": [{"Source": {"Target": "Parameter", "Id": "ParamAngleX"}, "Weight": 100, "Type": "X", "Reflect": false}],
+                "Output": [{"Destination": {"Target": "Parameter", "Id": "ParamHairFront"}, "VertexIndex": 1, "Scale": 30.0, "Type": "Angle"}],
+                "Vertices": [
+                    {"Position": {"X": 0.0, "Y": 0.0}, "Mobility": 1.0, "Delay": 1.0, "Acceleration": 1.0, "Radius": 0.0},
+                    {"Position": {"X": 0.0, "Y": -10.0}, "Mobility": 0.85, "Delay": 0.12, "Acceleration": 1.8, "Radius": 6.0}
+                ],
+                "Normalization": {
+                    "Position": {"Minimum": -30.0, "Default": 0.0, "Maximum": 30.0},
+                    "Angle": {"Minimum": -30.0, "Default": 0.0, "Maximum": 30.0}
+                }
+            }]
+        });
+        let expression = json!({
+            "Type": "Live2D Expression",
+            "Parameters": [
+                {"Id": "ParamEyeLOpen", "Value": 0.0, "Blend": "Overwrite"},
+                {"Id": "ParamMouthForm", "Value": 0.7, "Blend": "Add"}
+            ]
+        });
+        let motion = json!({
+            "Version": 3,
+            "Meta": {"Duration": 1.5, "Fps": 30.0, "Loop": true, "CurveCount": 2, "TotalSegmentCount": 3, "TotalPointCount": 5, "UserDataCount": 0},
+            "Curves": [
+                {"Target": "Parameter", "Id": "ParamAngleX", "Segments": [0.0, 0.0, 0, 1.5, 10.0]},
+                {"Target": "PartOpacity", "Id": "PartHair", "Segments": [0.0, 1.0, 0, 1.5, 1.0]}
+            ]
+        });
+        let (root, result) = run_model(
+            "content",
+            &[
+                ("model.moc3", fixture_moc3()),
+                ("model.physics3.json", serde_json::to_vec(&physics).unwrap()),
+                ("smile.exp3.json", serde_json::to_vec(&expression).unwrap()),
+                ("idle.motion3.json", serde_json::to_vec(&motion).unwrap()),
+            ],
+        );
+        let value = result.expect("census must succeed");
+        let census = census_of(&value);
+        // The physics document rides verbatim.
+        assert_eq!(census["physics3"]["raw"], physics);
+        assert_eq!(census["physics3"]["settings"][0]["vertices"], 2);
+        assert_eq!(census["physics3"]["settings"][0]["inputs"], 1);
+        assert_eq!(census["physics3"]["settings"][0]["outputs"], 1);
+        assert_eq!(
+            census["physics3"]["settings"][0]["normalization"]["Angle"]["Maximum"],
+            30.0
+        );
+        // Expression parameter values + blends are content.
+        assert_eq!(
+            census["expressions"][0]["parameter_values"][1],
+            json!({"blend": "Add", "id": "ParamMouthForm", "value": 0.7})
+        );
+        // Motion curve facts.
+        assert_eq!(census["motions_content"][0]["duration"], 1.5);
+        assert_eq!(census["motions_content"][0]["curve_count"], 2);
+        assert_eq!(census["motions_content"][0]["targets"]["Parameter"], 1);
+        assert_eq!(census["motions_content"][0]["targets"]["PartOpacity"], 1);
+        fs::remove_dir_all(&root).ok();
     }
 
     #[test]

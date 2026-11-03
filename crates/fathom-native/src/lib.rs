@@ -11,6 +11,7 @@
 pub mod artifact;
 pub mod audio;
 pub mod beam;
+pub mod blend;
 pub mod cubism;
 pub mod engine;
 pub mod game;
@@ -22,6 +23,7 @@ pub mod il2cpp;
 pub mod iostore;
 pub mod kirikiri;
 pub mod layout;
+pub mod mesh;
 pub mod python;
 pub mod renpy;
 pub mod rpgmaker;
@@ -295,6 +297,27 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(audio::census_audio_tree),
+    );
+    registry.register(
+        descriptor(
+            "census_blend_file",
+            ToolClass::Execute,
+            "blender",
+            "Census one mesh file (.blend/.fbx/.gltf/.glb/.obj) through \
+             the operator-configured Blender backend, run headless with \
+             factory startup and automatic script execution disabled: \
+             objects with parents, mesh vertex/polygon counts and shape \
+             keys, armature bones, actions. Optional export_gltf writes \
+             a GLB into output_dir for re-census by inspect_gltf_model",
+            target_and(
+                json!({
+                    "export_gltf": {"type": "boolean"},
+                    "output_dir": {"type": "string", "description": "Output directory under a configured target root (required when export_gltf is set)"}
+                }),
+                &[],
+            ),
+        ),
+        Arc::new(blend::census_blend_file),
     );
     registry.register(
         descriptor(
@@ -1100,6 +1123,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "inspect_fbx_binary",
+            ToolClass::Read,
+            "mesh",
+            "Census one FBX binary file: header version and the node-tree \
+             name census (geometry/model/material/deformer counts). \
+             Property payloads are skipped by declared length, never \
+             interpreted",
+            target_schema(),
+        ),
+        Arc::new(mesh::inspect_fbx_binary),
+    );
+    registry.register(
+        descriptor(
             "inspect_gamemaker_datawin",
             ToolClass::Read,
             "gamemaker",
@@ -1110,6 +1146,19 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(gamemaker::inspect_gamemaker_datawin),
+    );
+    registry.register(
+        descriptor(
+            "inspect_gltf_model",
+            ToolClass::Read,
+            "mesh",
+            "Census one glTF model (.gltf JSON or .glb): nodes, meshes \
+             with per-primitive morph-target counts and target names, \
+             skins with joint counts, animations, materials. Buffers \
+             are not decoded",
+            target_schema(),
+        ),
+        Arc::new(mesh::inspect_gltf_model),
     );
     registry.register(
         descriptor(

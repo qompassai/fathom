@@ -138,6 +138,19 @@ pub const AUDIO_FILES_MAX: usize = 100_000;
 /// need the most room).
 pub const AUDIO_HEAD_BYTES_MAX: u64 = 1_048_576;
 
+/// Largest node count the FBX census will walk.
+pub const FBX_NODES_MAX: usize = 1_000_000;
+
+/// Deepest nesting the FBX census will walk.
+pub const FBX_DEPTH_MAX: usize = 64;
+
+/// Largest glTF file the census will read whole.
+pub const GLTF_BYTES_MAX: u64 = 268_435_456;
+
+/// Largest node/mesh count accepted in one glTF
+/// census.
+pub const GLTF_ITEMS_MAX: usize = 100_000;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took
