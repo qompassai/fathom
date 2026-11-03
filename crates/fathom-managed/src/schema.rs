@@ -253,10 +253,16 @@ pub struct SigType {
 #[derive(Clone, Debug, PartialEq)]
 pub enum SigKind {
     /// Multi-dimensional array: element type and rank.
-    Array { elem: Box<SigType>, rank: u32 },
+    Array {
+        elem: Box<SigType>,
+        rank: u32,
+    },
     ByRef(Box<SigType>),
     Class(TypeToken),
-    GenericInst { args: Vec<SigType>, base: Box<SigType> },
+    GenericInst {
+        args: Vec<SigType>,
+        base: Box<SigType>,
+    },
     MVar(u32),
     Ptr(Box<SigType>),
     /// A leaf element type by its ECMA name: bool, char, i1,
@@ -445,10 +451,7 @@ fn rva_to_offset(sections: &[goblin::pe::section_table::SectionTable], rva: u32)
     None
 }
 
-fn parse_metadata_root(
-    bytes: &[u8],
-    root: usize,
-) -> Result<Option<AssemblySchema>, FathomError> {
+fn parse_metadata_root(bytes: &[u8], root: usize) -> Result<Option<AssemblySchema>, FathomError> {
     if read_u32_at(bytes, root)? != 0x424A_5342 {
         return Err(malformed("metadata root signature is not BSJB"));
     }
@@ -606,7 +609,9 @@ fn extract_schema(tables: &Tables, heaps: &Heaps) -> Result<AssemblySchema, Fath
     }
     for row in 0..tables.rows[table::TYPE_SPEC] as usize {
         let values = tables.row_values(table::TYPE_SPEC, row)?;
-        schema.type_specs.push(heap_blob(heaps, values[0])?.to_vec());
+        schema
+            .type_specs
+            .push(heap_blob(heaps, values[0])?.to_vec());
     }
     for row in 0..tables.rows[table::CLASS_LAYOUT] as usize {
         let values = tables.row_values(table::CLASS_LAYOUT, row)?;
@@ -656,8 +661,7 @@ fn extract_attributes(
     };
     for row in 0..tables.rows[table::CUSTOM_ATTRIBUTE] as usize {
         let values = tables.row_values(table::CUSTOM_ATTRIBUTE, row)?;
-        let (parent_table, parent_row) =
-            coded_target(&CODED_HAS_CUSTOM_ATTRIBUTE, values[0]);
+        let (parent_table, parent_row) = coded_target(&CODED_HAS_CUSTOM_ATTRIBUTE, values[0]);
         // CustomAttributeType: only tags 2 (MethodDef) and 3
         // (MemberRef) are defined; the coded list in this
         // module exists for geometry, so decode the tag here.
@@ -915,8 +919,15 @@ mod tests {
         tables_stream.extend_from_slice(&[2, 0]);
         tables_stream.push(0);
         tables_stream.push(0);
-        let valid: u64 = (1 << 1) | (1 << 2) | (1 << 4) | (1 << 6) | (1 << 10) | (1 << 12)
-            | (1 << 27) | (1 << 32) | (1 << 35);
+        let valid: u64 = (1 << 1)
+            | (1 << 2)
+            | (1 << 4)
+            | (1 << 6)
+            | (1 << 10)
+            | (1 << 12)
+            | (1 << 27)
+            | (1 << 32)
+            | (1 << 35);
         tables_stream.extend_from_slice(&valid.to_le_bytes());
         tables_stream.extend_from_slice(&[0; 8]);
         for rows in [2_u32, 1, 1, 1, 1, 1, 1, 1, 1] {
@@ -1019,7 +1030,10 @@ mod tests {
         );
         assert_eq!(schema.type_refs[1].name, "SerializeField");
         assert_eq!(schema.type_refs[1].namespace, "UnityEngine");
-        assert_eq!(schema.type_specs, vec![vec![0x15, 0x11, 0x06, 0x01, 0x13, 0x00]]);
+        assert_eq!(
+            schema.type_specs,
+            vec![vec![0x15, 0x11, 0x06, 0x01, 0x13, 0x00]]
+        );
         // The attribute lands on (Field, row 1) under its
         // qualified type name, resolved through the MemberRef.
         assert_eq!(
