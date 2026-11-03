@@ -129,6 +129,15 @@ pub const XP3_INDEX_BYTES_MAX: u64 = 268_435_456;
 /// Largest segment count accepted for one XP3 entry.
 pub const XP3_SEGMENTS_MAX: usize = 1_024;
 
+/// Largest file count the audio census will process in
+/// one tree.
+pub const AUDIO_FILES_MAX: usize = 100_000;
+
+/// Bytes of file head the audio census reads for header
+/// parsing (MP3 frame/Xing search and MP4 box search
+/// need the most room).
+pub const AUDIO_HEAD_BYTES_MAX: u64 = 1_048_576;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took
