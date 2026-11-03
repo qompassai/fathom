@@ -165,6 +165,12 @@ pub const QUERY_TEXT_BYTES_MAX: usize = 512;
 /// Decoded segment rows in one Ren'Py RPA index (readers SPEC §2.3).
 pub const RPA_ENTRIES_MAX: usize = 100_000;
 
+/// Entries in one RGSS archive.
+pub const RGSS_ENTRIES_MAX: usize = 100_000;
+
+/// Bytes in one RGSS entry name.
+pub const RGSS_NAME_BYTES_MAX: u32 = 4_096;
+
 /// Decompressed bytes of one Ren'Py RPA pickle index
 /// (readers SPEC §2.3).
 pub const RPA_INDEX_BYTES_MAX: usize = 33_554_432;
