@@ -1144,8 +1144,7 @@ fn extract_serialized(
     let summary = parse_serialized_file(bytes)?;
     let subdir_name = safe_file_name(node_key, "serialized");
     let subdir = out_dir.join(&subdir_name);
-    std::fs::create_dir_all(&subdir)
-        .map_err(|error| io_error("create", &subdir, error))?;
+    std::fs::create_dir_all(&subdir).map_err(|error| io_error("create", &subdir, error))?;
     for payload in &summary.payloads {
         if !matches!(
             payload.class_id,
@@ -1153,7 +1152,15 @@ fn extract_serialized(
         ) {
             continue;
         }
-        extract_object(&summary, bytes, payload, node_key, &subdir_name, &subdir, state)?;
+        extract_object(
+            &summary,
+            bytes,
+            payload,
+            node_key,
+            &subdir_name,
+            &subdir,
+            state,
+        )?;
     }
     Ok(())
 }
@@ -1281,9 +1288,7 @@ fn read_serialized_bytes<'a>(
     let content = bytes.get(content_start..content_end)?;
     let field_len = 4usize.checked_add(length)?;
     let aligned_len = field_len.checked_add(3)? / 4 * 4;
-    *position = field_start
-        .checked_add(aligned_len)?
-        .min(bytes.len());
+    *position = field_start.checked_add(aligned_len)?.min(bytes.len());
     Some(content)
 }
 
@@ -1298,23 +1303,86 @@ fn parse_text_asset(payload: &[u8], little: bool) -> Option<(String, &[u8])> {
 
 /// Parse a Texture2D payload's leading metadata (name,
 /// width, height, complete image size, format, mip
-/// count). Pixel decoding is out of scope: image-data
-/// placement needs the type tree the readers SPEC keeps
-/// unexpanded, so the raw payload is what extraction
-/// retains and the manifest says so.
+/// count). Three serialized layouts exist, each verified
+/// against shipped files and UnityPy's parse of them:
+/// `modern` (Unity 2022-era: a forced-fallback format
+/// and flag bytes precede the fields, a mips-stripped
+/// count sits before the format), `unity6` (Unity 6000:
+/// the fallback fields are gone, one flag word and the
+/// mips-stripped count remain), and `legacy` (the fields
+/// directly after the name). All three are tried under
+/// strict validation — dimensions inside the texture
+/// bound, a plausible format code, and a mip count the
+/// dimensions can actually carry (a 0×0 record is
+/// accepted only as the consistent empty texture a
+/// runtime-generated font atlas serializes as) — and
+/// the layout that matched is recorded; none matching
+/// records the metadata as absent, never guessed. Pixel
+/// decoding is out of scope: image-data placement needs
+/// the type tree the readers SPEC keeps unexpanded, so
+/// the raw payload is what extraction retains and the
+/// manifest says so.
 fn parse_texture_prefix(payload: &[u8], little: bool) -> Option<Value> {
     let mut position = 0usize;
     let name = read_serialized_bytes(payload, &mut position, little)?;
+    let name = String::from_utf8_lossy(name).into_owned();
+    // (prefix bytes after the name, mips-stripped count
+    // present, layout tag)
+    for (skip, stripped, layout) in [
+        (8_usize, true, "modern"),
+        (4, true, "unity6"),
+        (0, false, "legacy"),
+    ] {
+        if let Some(meta) = texture_fields(payload, position, little, skip, stripped, layout, &name)
+        {
+            return Some(meta);
+        }
+    }
+    None
+}
+
+/// Read the numeric Texture2D fields at `start` under
+/// one layout and validate them (see parse_texture_prefix).
+fn texture_fields(
+    payload: &[u8],
+    start: usize,
+    little: bool,
+    skip: usize,
+    stripped: bool,
+    layout: &str,
+    name: &str,
+) -> Option<Value> {
+    let mut position = start.checked_add(skip)?;
+    if position > payload.len() {
+        return None;
+    }
     let width = read_i32_at(payload, &mut position, little)?;
     let height = read_i32_at(payload, &mut position, little)?;
     let complete_image_size = read_i32_at(payload, &mut position, little)?;
+    if stripped {
+        let _mips_stripped = read_i32_at(payload, &mut position, little)?;
+    }
     let format = read_i32_at(payload, &mut position, little)?;
     let mip_count = read_i32_at(payload, &mut position, little)?;
-    if !(1..=TEXTURE_DIMENSION_MAX).contains(&width)
-        || !(1..=TEXTURE_DIMENSION_MAX).contains(&height)
-        || complete_image_size < 0
-        || mip_count < 0
-    {
+    if complete_image_size < 0 || !(0..=128).contains(&format) {
+        return None;
+    }
+    // A texture with pixels records their size; only the
+    // consistent empty texture (below) has size 0.
+    if width > 0 && complete_image_size == 0 {
+        return None;
+    }
+    let dims_ok = if width == 0 && height == 0 {
+        complete_image_size == 0 && mip_count == 1
+    } else {
+        (1..=TEXTURE_DIMENSION_MAX).contains(&width)
+            && (1..=TEXTURE_DIMENSION_MAX).contains(&height)
+            && mip_count >= 1
+            // A texture cannot carry more mip levels than
+            // its largest dimension supports.
+            && (mip_count as u32) <= 32 - (width.max(height) as u32).leading_zeros()
+    };
+    if !dims_ok {
         return None;
     }
     Some(json!({
@@ -1322,8 +1390,9 @@ fn parse_texture_prefix(payload: &[u8], little: bool) -> Option<Value> {
         "format": format,
         "format_name": texture_format_name(format),
         "height": height,
+        "layout": layout,
         "mip_count": mip_count,
-        "name": String::from_utf8_lossy(name).into_owned(),
+        "name": name,
         "width": width,
     }))
 }
@@ -1430,10 +1499,7 @@ fn extract_texture(
     mut entry: Value,
 ) -> Result<(), FathomError> {
     let metadata = parse_texture_prefix(slice, summary.little);
-    let file_name = match metadata
-        .as_ref()
-        .and_then(|meta| meta["name"].as_str())
-    {
+    let file_name = match metadata.as_ref().and_then(|meta| meta["name"].as_str()) {
         Some(name) => format!(
             "{}.tex2d.bin",
             safe_file_name(name, &format!("texture2d_{}", payload.path_id))
@@ -1441,9 +1507,8 @@ fn extract_texture(
         None => format!("texture2d_{}.bin", payload.path_id),
     };
     entry["payload_form"] = json!("raw_object");
-    entry["pixel_data"] = json!(
-        "not_decoded — image-data placement requires the type tree; raw payload retained"
-    );
+    entry["pixel_data"] =
+        json!("not_decoded — image-data placement requires the type tree; raw payload retained");
     entry["texture"] = metadata.unwrap_or(Value::Null);
     match write_budgeted(state, subdir, &file_name, slice)? {
         Some(digest) => {
@@ -1494,8 +1559,9 @@ fn extract_mono_behaviour(
     }
     let node_value = entry["node"].clone();
     state.entries.push(entry);
-    for (index, (offset, length, source)) in
-        carve_moc3_spans(slice, summary.little).into_iter().enumerate()
+    for (index, (offset, length, source)) in carve_moc3_spans(slice, summary.little)
+        .into_iter()
+        .enumerate()
     {
         let carved = &slice[offset..offset + length];
         let carve_name = format!("monobehaviour_{}_carve{index}.moc3", payload.path_id);
@@ -1566,11 +1632,10 @@ fn load_blocks_info(
     )?;
     let info_bytes = match compression {
         0 => stored_info,
-        _ => lz4_flex::block::decompress(
-            &stored_info,
-            header.uncompressed_blocks_info_size as usize,
-        )
-        .map_err(|error| mismatch(format!("blocks info does not decompress: {error}")))?,
+        _ => {
+            lz4_flex::block::decompress(&stored_info, header.uncompressed_blocks_info_size as usize)
+                .map_err(|error| mismatch(format!("blocks info does not decompress: {error}")))?
+        }
     };
     if info_bytes.len() != header.uncompressed_blocks_info_size as usize {
         return Err(mismatch(
@@ -1635,7 +1700,9 @@ fn extract_from_bundle(
         };
         if node.flags & 4 != 0 {
             if let Err(error) = extract_serialized(&node.path, &node_data, out_dir, state) {
-                state.notes.push(format!("{}: {}", node.path, error.message));
+                state
+                    .notes
+                    .push(format!("{}: {}", node.path, error.message));
             }
         } else {
             let file_name = safe_file_name(&node.path, "node");
@@ -1675,10 +1742,7 @@ pub fn extract_unity_bundle(
     args: &Value,
 ) -> Result<Value, FathomError> {
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
-    let out_dir = paths::validate_output_dir(
-        config,
-        Path::new(require_str(args, "output_dir")?),
-    )?;
+    let out_dir = paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
     let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
     let subject_sha256 = subject.sha256.clone();
     let file_len = subject.size_bytes;
@@ -1701,7 +1765,14 @@ pub fn extract_unity_bundle(
     let mut facts = json!({ "target": path.display().to_string() });
     if prefix.starts_with(b"UnityFS\0") {
         let header = parse_bundle_header(&prefix)?;
-        extract_from_bundle(&mut reader, &header, file_len, &out_dir, &mut state, &mut facts)?;
+        extract_from_bundle(
+            &mut reader,
+            &header,
+            file_len,
+            &out_dir,
+            &mut state,
+            &mut facts,
+        )?;
     } else {
         let bytes = reader.read_range(0, file_len)?;
         facts["container"] = json!("serialized_file");
@@ -2570,10 +2641,7 @@ mod tests {
             .iter()
             .find(|entry| entry["class"] == "MonoBehaviour")
             .unwrap();
-        assert_eq!(
-            mono["type_hash"],
-            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-        );
+        assert_eq!(mono["type_hash"], "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
         let carve = entries
             .iter()
             .find(|entry| entry["kind"] == "moc3_carve")
@@ -2581,6 +2649,70 @@ mod tests {
         assert_eq!(carve["length_source"], "int32_at_minus_4");
         assert_eq!(carve["moc3_version"], 5);
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_texture_prefix_modern_layout() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&9_i32.to_le_bytes());
+        payload.extend_from_slice(b"HeroAtlas");
+        payload.extend_from_slice(&[0, 0, 0]); // align 13 -> 16
+        payload.extend_from_slice(&4_i32.to_le_bytes()); // forced fallback format
+        payload.extend_from_slice(&[0, 1, 0, 0]); // flag bytes + padding
+        for value in [8192_i32, 8192, 21845, 0, 25, 14] {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        let meta = parse_texture_prefix(&payload, true).unwrap();
+        assert_eq!(meta["layout"], "modern");
+        assert_eq!(meta["width"], 8192);
+        assert_eq!(meta["height"], 8192);
+        assert_eq!(meta["format_name"], "BC7");
+        assert_eq!(meta["mip_count"], 14);
+    }
+
+    #[test]
+    fn validation_texture_prefix_unity6_layout_and_empty_font() {
+        // The Unity 6000 shape (flag word, then fields
+        // with mips-stripped), taken from a shipped file.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&4_i32.to_le_bytes());
+        payload.extend_from_slice(b"Knob");
+        payload.extend_from_slice(&0_i32.to_le_bytes()); // alpha-optional + padding
+        for value in [64_i32, 64, 21844, 0, 4, 7] {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        let meta = parse_texture_prefix(&payload, true).unwrap();
+        assert_eq!(meta["layout"], "unity6");
+        assert_eq!(meta["width"], 64);
+        assert_eq!(meta["format_name"], "RGBA32");
+        assert_eq!(meta["mip_count"], 7);
+        // A runtime-generated font atlas serializes as a
+        // consistent empty texture (0x0, no image data).
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&12_i32.to_le_bytes());
+        payload.extend_from_slice(b"Font Texture");
+        payload.extend_from_slice(&0_i32.to_le_bytes()); // alpha-optional + padding
+        for value in [0_i32, 0, 0, 0, 4, 1] {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        let meta = parse_texture_prefix(&payload, true).unwrap();
+        assert_eq!(meta["width"], 0);
+        assert_eq!(meta["height"], 0);
+    }
+
+    #[test]
+    fn adversarial_texture_prefix_rejects_absurd_fields() {
+        // Mirrors a shipped-file trap seen in the corpus:
+        // fields that line up as a plausible legacy read
+        // but carry an impossible format/mip combination.
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&9_i32.to_le_bytes());
+        payload.extend_from_slice(b"blowImage");
+        payload.extend_from_slice(&[0, 0, 0]);
+        for value in [4_i32, 256, 794, 794, 1891308] {
+            payload.extend_from_slice(&value.to_le_bytes());
+        }
+        assert!(parse_texture_prefix(&payload, true).is_none());
     }
 
     #[test]
@@ -2598,10 +2730,8 @@ mod tests {
             root,
         ))
         .unwrap();
-        let outside = std::env::temp_dir().join(format!(
-            "fathom-extract-outside-{}",
-            std::process::id()
-        ));
+        let outside =
+            std::env::temp_dir().join(format!("fathom-extract-outside-{}", std::process::id()));
         let args = json!({
             "output_dir": outside.display().to_string(),
             "target": target.display().to_string(),
