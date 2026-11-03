@@ -599,6 +599,22 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_renpy_archive",
+            ToolClass::Observe,
+            "renpy",
+            "Extract the files of a Ren'Py RPA archive (2.0 and 3.0) into an \
+             output directory under a target root, with a manifest: entry \
+             content is each segment's stored prefix followed by its stored \
+             range; entry paths are confined to the output directory",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(renpy::extract_renpy_archive),
+    );
+    registry.register(
+        descriptor(
             "extract_unity_bundle",
             ToolClass::Observe,
             "unity",
