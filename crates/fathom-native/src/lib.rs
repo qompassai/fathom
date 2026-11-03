@@ -20,6 +20,7 @@ pub mod il2cpp;
 pub mod layout;
 pub mod python;
 pub mod renpy;
+pub mod rpgmaker;
 pub mod sections;
 pub mod unity;
 pub mod unreal;
@@ -615,6 +616,22 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_rgss_archive",
+            ToolClass::Observe,
+            "rpgmaker",
+            "Extract the decrypted entries of an RPG Maker RGSS archive \
+             (RGSSAD version 1 and version 3) into an output directory under \
+             a target root, with a manifest; entry paths are confined to \
+             the output directory",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(rpgmaker::extract_rgss_archive),
+    );
+    registry.register(
+        descriptor(
             "extract_unity_bundle",
             ToolClass::Observe,
             "unity",
@@ -1062,6 +1079,17 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(renpy::inspect_renpy_archive),
+    );
+    registry.register(
+        descriptor(
+            "inspect_rgss_archive",
+            ToolClass::Read,
+            "rpgmaker",
+            "RPG Maker RGSS archive census (RGSSAD version 1 and version 3): \
+             entry names, sizes, and SHA-256 of every entry's decrypted payload",
+            target_schema(),
+        ),
+        Arc::new(rpgmaker::inspect_rgss_archive),
     );
     registry.register(
         descriptor(
