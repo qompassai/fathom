@@ -165,7 +165,9 @@ fn parse_file_chunk(payload: &[u8]) -> Result<Entry> {
                     .get(22..22 + name_units * 2)
                     .ok_or_else(|| mismatch("xp3 info name overruns its subchunk".into()))?;
                 let words: Vec<u16> = name_bytes
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                     .collect();
                 let name = String::from_utf16(&words)
@@ -180,7 +182,7 @@ fn parse_file_chunk(payload: &[u8]) -> Result<Entry> {
                 if body.len() / 28 > XP3_SEGMENTS_MAX {
                     return Err(mismatch("xp3 entry segment count exceeds the bound".into()));
                 }
-                for record in body.chunks_exact(28) {
+                for record in body.as_chunks::<28>().0 {
                     entry.segments.push(Segment {
                         compressed: u32_at(record, 0).unwrap_or(0) & 0x01 != 0,
                         offset: u64_at(record, 4).unwrap_or(0),
