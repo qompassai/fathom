@@ -536,6 +536,66 @@ fn container_kind(file: &WalkedFile) -> Option<&'static str> {
 
 /// Census one game tree or bare archive file and emit
 /// the unified manifest.
+/// RPG Maker MV/MZ encrypted-media facts: counts of the
+/// encrypted image/audio/movie extensions, a sample
+/// check of the `RPGMV` header signature the encrypted
+/// format carries, and the System.json encryption flags
+/// (the key itself is never recorded — only that one is
+/// present). Returns None when a tree holds neither
+/// encrypted media nor a System.json.
+fn encrypted_media_facts(root: &Path, files: &[WalkedFile]) -> Option<Value> {
+    let mut audio = 0_usize;
+    let mut images = 0_usize;
+    let mut movies = 0_usize;
+    let mut header_checked = 0_usize;
+    let mut header_valid = 0_usize;
+    let mut system: Option<Value> = None;
+    for file in files {
+        match file.ext.as_str() {
+            "rpgmvo" => audio += 1,
+            "rpgmvp" => {
+                images += 1;
+                if header_checked < 8 {
+                    header_checked += 1;
+                    let mut head = [0_u8; 5];
+                    if let Ok(mut handle) = File::open(root.join(&file.rel)) {
+                        if handle.read_exact(&mut head).is_ok() && &head == b"RPGMV" {
+                            header_valid += 1;
+                        }
+                    }
+                }
+            }
+            "rpgmvm" => movies += 1,
+            _ => {}
+        }
+        if system.is_none()
+            && file.name == "system.json"
+            && file.rel.to_lowercase().contains("data/")
+        {
+            if let Ok(text) = std::fs::read_to_string(root.join(&file.rel)) {
+                if let Ok(parsed) = serde_json::from_str::<Value>(&text) {
+                    system = Some(json!({
+                        "encryption_key_present": parsed.get("encryptionKey").is_some(),
+                        "has_encrypted_audio": parsed.get("hasEncryptedAudio").cloned().unwrap_or(Value::Null),
+                        "has_encrypted_images": parsed.get("hasEncryptedImages").cloned().unwrap_or(Value::Null),
+                    }));
+                }
+            }
+        }
+    }
+    if audio == 0 && images == 0 && movies == 0 && system.is_none() {
+        return None;
+    }
+    Some(json!({
+        "encrypted_audio_files": audio,
+        "encrypted_image_files": images,
+        "encrypted_movie_files": movies,
+        "header_signature_checked": header_checked,
+        "header_signature_valid": header_valid,
+        "system_json": system,
+    }))
+}
+
 pub fn census_game_tree(
     _registry: &Registry,
     config: &Config,
@@ -556,7 +616,9 @@ pub fn census_game_tree(
     let mut unknowns: Vec<(String, String)> = Vec::new();
     let mut classes: BTreeMap<&'static str, (usize, u64)> = BTreeMap::new();
     let mut containers: Vec<Value> = Vec::new();
-    let (fp_files, fp_dirs, total_files, total_bytes, walk_facts) = if metadata.is_dir() {
+    let (fp_files, fp_dirs, total_files, total_bytes, walk_facts, encrypted_media) = if metadata
+        .is_dir()
+    {
         let walk = walk_tree(&target);
         if walk.capped {
             unknowns.push((
@@ -605,6 +667,7 @@ pub fn census_game_tree(
                 "files": walk.files.len(),
                 "unreadable": walk.unreadable,
             })),
+            encrypted_media_facts(&target, &walk.files),
         )
     } else {
         // Bare file target: a container in its own
@@ -656,9 +719,9 @@ pub fn census_game_tree(
         match listing {
             Some((files, dirs)) => {
                 let total = files.len();
-                (files, dirs, total, metadata.len(), None)
+                (files, dirs, total, metadata.len(), None, None)
             }
-            None => (Vec::new(), Vec::new(), 1, metadata.len(), None),
+            None => (Vec::new(), Vec::new(), 1, metadata.len(), None, None),
         }
     };
 
@@ -682,6 +745,7 @@ pub fn census_game_tree(
         "asset_classes": class_rows,
         "containers": containers,
         "dialogue": Value::Null,
+        "encrypted_media": encrypted_media,
         "engine": {
             "also_detected": also_detected,
             "evidence": evidence,
@@ -1180,6 +1244,31 @@ mod tests {
                 .len(),
             0
         );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_mv_encrypted_media_facts() {
+        let (root, result) = run_game(
+            "mv-encrypted",
+            &[
+                ("www/data/System.json", br#"{"hasEncryptedAudio":true,"hasEncryptedImages":true,"encryptionKey":"d41d8cd98f00b204e9800998ecf8427e"}"#.to_vec()),
+                ("www/img/pic.rpgmvp", b"RPGMV\x00\x00\x00\x03\x01".to_vec()),
+                ("www/audio/bgm.rpgmvo", b"OggS".to_vec()),
+                ("www/js/plugins.js", b"// plugins".to_vec()),
+            ],
+        );
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        assert_eq!(manifest["engine"]["name"], "rpgmaker");
+        let media = &manifest["encrypted_media"];
+        assert_eq!(media["encrypted_image_files"], 1);
+        assert_eq!(media["encrypted_audio_files"], 1);
+        assert_eq!(media["header_signature_valid"], 1);
+        assert_eq!(media["system_json"]["encryption_key_present"], true);
+        assert_eq!(media["system_json"]["has_encrypted_images"], true);
+        // The key VALUE must never be recorded.
+        assert!(!format!("{media}").contains("d41d8cd9"));
         fs::remove_dir_all(&root).ok();
     }
 }
