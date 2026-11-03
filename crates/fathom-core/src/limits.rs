@@ -80,6 +80,32 @@ pub const GAME_WALK_FILES_MAX: usize = 200_000;
 /// Total bytes one game-archive extraction may write.
 pub const GAME_EXTRACT_BYTES_MAX: u64 = 4_294_967_296;
 
+/// Largest pak target the Unreal reader will open. The
+/// pak reader streams bounded ranges (footer, SHA-1-
+/// verified index, per-entry spans) and never
+/// materialises the target, so its bound is set for
+/// real shipped titles rather than the shared archive
+/// bound: the corpus's largest pak is 7.9 GB.
+pub const PAK_TARGET_BYTES_MAX: u64 = 68_719_476_736;
+
+/// Largest string the uasset census accepts in one
+/// FString (names in real packages are short paths and
+/// identifiers).
+pub const UASSET_NAME_BYTES_MAX: u32 = 1_024;
+
+/// Largest name table the uasset census will walk.
+pub const UASSET_NAMES_MAX: u64 = 65_536;
+
+/// Largest export map the uasset census will walk.
+pub const UASSET_EXPORTS_MAX: u64 = 100_000;
+
+/// Largest import map the uasset census will walk.
+pub const UASSET_IMPORTS_MAX: u64 = 100_000;
+
+/// Rows of any one map the uasset census lists in its
+/// findings; totals are always reported in full.
+pub const UASSET_LISTED_MAX: usize = 4_096;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took
