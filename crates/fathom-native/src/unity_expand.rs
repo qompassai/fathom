@@ -82,10 +82,18 @@ const DECODED_VALUES_RETAINED_MAX: usize = 4096;
 /// Per-object rows retained in the expansion record; counts
 /// stay exact past the cap, the omission is named.
 const OBJECT_ROWS_RETAINED_MAX: usize = 100_000;
-/// Tree rows flatten to this depth at most (a recursive
-/// class would otherwise flatten forever; decoding itself
-/// is bounded by payload bytes, not by this cap).
+/// Tree rows flatten to this depth at most, and to this
+/// many rows per class tree. Flattening is a report aid —
+/// decoding never reads it — and a recursive class graph
+/// (a class whose fields reach back into itself, directly
+/// or through other classes) would otherwise enumerate
+/// exponentially many paths within the depth bound; a
+/// class node already present among its own ancestors is
+/// emitted but not descended, and a tree that still
+/// exceeds the row bound is marked truncated in the
+/// class record.
 const TREE_FLATTEN_DEPTH_MAX: usize = 32;
+const TREE_ROWS_MAX: usize = 100_000;
 /// VALUES the decoder bounds (mirroring the prototype):
 /// nesting depth, array element count, string byte count,
 /// and managed-reference entry count.
@@ -1907,13 +1915,25 @@ fn value_digest(value: &Value) -> String {
 /// Flatten a class tree into report rows (level, type,
 /// name, byte size, kind), depth-capped; a layout error
 /// while flattening refuses the class, as in the prototype.
+struct FlattenState {
+    ancestors: Vec<(usize, usize)>,
+    rows_left: usize,
+    truncated: bool,
+}
+
 fn flatten_tree(
     builder: &LayoutBuilder,
     node: &Node,
     level: usize,
     name: &str,
     out: &mut Vec<Value>,
+    state: &mut FlattenState,
 ) -> XResult<()> {
+    if state.rows_left == 0 {
+        state.truncated = true;
+        return Ok(());
+    }
+    state.rows_left -= 1;
     let mut size = node.size.get();
     if node.kind == NodeKind::Class {
         builder.class_node_fields(node)?;
@@ -1929,21 +1949,42 @@ fn flatten_tree(
     if level >= TREE_FLATTEN_DEPTH_MAX {
         return Ok(());
     }
+    // A class already among its own ancestors is a
+    // recursive reference: its subtree is the ancestor's,
+    // so the row stands alone.
+    let identity = node
+        .class_ref
+        .as_ref()
+        .map(|class_ref| (class_ref.assembly, class_ref.typedef));
+    if let Some(identity) = identity
+        && state.ancestors.contains(&identity)
+    {
+        return Ok(());
+    }
     match node.kind {
         NodeKind::Array => {
             if let Some(elem) = &node.elem {
-                flatten_tree(builder, elem, level + 1, "data", out)?;
+                flatten_tree(builder, elem, level + 1, "data", out, state)?;
             }
         }
         NodeKind::Class => {
+            if let Some(identity) = identity {
+                state.ancestors.push(identity);
+            }
             let fields = builder.class_node_fields(node)?;
             for field in fields.iter() {
-                flatten_tree(builder, &field.node, level + 1, &field.name, out)?;
+                flatten_tree(builder, &field.node, level + 1, &field.name, out, state)?;
+                if state.truncated {
+                    break;
+                }
+            }
+            if identity.is_some() {
+                state.ancestors.pop();
             }
         }
         NodeKind::Explicit => {
             for (_offset, field) in &node.members {
-                flatten_tree(builder, &field.node, level + 1, &field.name, out)?;
+                flatten_tree(builder, &field.node, level + 1, &field.name, out, state)?;
             }
         }
         _ => {}
@@ -2048,7 +2089,17 @@ fn build_class_entry(
             );
             *root.resolved.borrow_mut() = Some(fields.clone());
             let mut tree: Vec<Value> = Vec::new();
-            if let Err(error) = flatten_tree(builder, &root, 0, &display, &mut tree) {
+            let mut flatten_state = FlattenState {
+                ancestors: Vec::new(),
+                rows_left: TREE_ROWS_MAX,
+                truncated: false,
+            };
+            let flatten_result =
+                flatten_tree(builder, &root, 0, &display, &mut tree, &mut flatten_state);
+            if flatten_state.truncated {
+                info.insert("tree_truncated".to_string(), json!(true));
+            }
+            if let Err(error) = flatten_result {
                 info.insert("status".to_string(), json!("refused"));
                 info.insert("construct".to_string(), json!(error.construct));
                 info.insert(
@@ -2391,11 +2442,11 @@ pub fn expand_unity_monobehaviours(
             record.insert("file".to_string(), json!(source.key));
             record.insert("path_id".to_string(), json!(payload.path_id));
             let refuse = |record: &mut Map<String, Value>,
-                              refusal_counts: &mut BTreeMap<String, u64>,
-                              file_refused: &mut u64,
-                              refused: &mut u64,
-                              construct: String,
-                              detail: Option<String>| {
+                          refusal_counts: &mut BTreeMap<String, u64>,
+                          file_refused: &mut u64,
+                          refused: &mut u64,
+                          construct: String,
+                          detail: Option<String>| {
                 record.insert("status".to_string(), json!("refused"));
                 record.insert("construct".to_string(), json!(construct.clone()));
                 if let Some(detail) = detail {
@@ -2753,6 +2804,43 @@ mod tests {
         let node = Node::new("Widget".to_string(), NodeKind::Class, -1, 1);
         *node.resolved.borrow_mut() = Some(Rc::new(fields));
         node
+    }
+
+    fn typed_class_node(typedef: usize, fields: Vec<FieldLayout>) -> Node {
+        let mut node = class_node(fields);
+        node.class_ref = Some(ClassRef {
+            assembly: 0,
+            subst: None,
+            typedef,
+        });
+        node
+    }
+
+    #[test]
+    fn flatten_stops_at_recursive_class() {
+        // Class A (typedef 0) holds a B (typedef 1); B holds
+        // an A again. Flattening must emit the recursive A
+        // row but not descend into it: 3 rows, no truncation.
+        let back_ref = typed_class_node(
+            0,
+            vec![field(
+                "leaf",
+                Node::new("i4".to_string(), NodeKind::Prim, 4, 4),
+            )],
+        );
+        let middle = typed_class_node(1, vec![field("again", back_ref)]);
+        let root = typed_class_node(0, vec![field("middle", middle)]);
+        let builder = empty_builder();
+        let mut out: Vec<Value> = Vec::new();
+        let mut state = FlattenState {
+            ancestors: Vec::new(),
+            rows_left: TREE_ROWS_MAX,
+            truncated: false,
+        };
+        flatten_tree(&builder, &root, 0, "A", &mut out, &mut state)
+            .expect("flatten of a recursive graph terminates");
+        assert_eq!(out.len(), 3);
+        assert!(!state.truncated);
     }
 
     fn field(name: &str, node: Node) -> FieldLayout {
