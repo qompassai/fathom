@@ -71,6 +71,12 @@ pub const FIELD_USAGE_FUNCTION_COUNT_MAX: usize = 4;
 pub const FUNCTION_COUNT_MAX: usize = 5_000;
 
 /// Wall-clock bound for one Ghidra provider run that performs a
+/// Directory depth descended by one game-tree census.
+pub const GAME_WALK_DEPTH_MAX: usize = 24;
+
+/// Files inventoried by one game-tree census.
+pub const GAME_WALK_FILES_MAX: usize = 200_000;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took
