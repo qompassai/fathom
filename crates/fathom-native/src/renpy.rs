@@ -122,6 +122,8 @@ fn opcode_name(byte: u8) -> String {
         b'Q' => "BINPERSID",
         b'R' => "REDUCE",
         b'S' => "STRING",
+        b'T' => "BINSTRING",
+        b'U' => "SHORT_BINSTRING",
         b'b' => "BUILD",
         b'c' => "GLOBAL",
         b'i' => "INST",
@@ -430,6 +432,23 @@ impl<'a> Interpreter<'a> {
                         .map_err(|_| shape("UNICODE is not UTF-8".to_string()))?;
                     self.push(PickleValue::Str(text))?;
                 }
+                b'U' => {
+                    let count = self.read_byte()? as usize;
+                    let raw = self.read_bytes(count)?;
+                    let text = String::from_utf8(raw.to_vec())
+                        .map_err(|_| shape("SHORT_BINSTRING is not UTF-8".to_string()))?;
+                    self.push(PickleValue::Str(text))?;
+                }
+                b'T' => {
+                    let count = i32::from_le_bytes(self.read_bytes(4)?.try_into().unwrap());
+                    if count < 0 {
+                        return Err(shape("BINSTRING with a negative length".to_string()));
+                    }
+                    let raw = self.read_bytes(count as usize)?;
+                    let text = String::from_utf8(raw.to_vec())
+                        .map_err(|_| shape("BINSTRING is not UTF-8".to_string()))?;
+                    self.push(PickleValue::Str(text))?;
+                }
                 b'C' => {
                     let count = self.read_byte()? as usize;
                     let raw = self.read_bytes(count)?.to_vec();
@@ -558,6 +577,12 @@ fn shape_index(
             let prefix = if three_tuple {
                 match fields.next() {
                     Some(PickleValue::Bytes(bytes)) => bytes,
+                    // Writers from the protocol-0 lineage emit
+                    // the prefix as a string; in that encoding
+                    // a string IS its UTF-8 bytes (the decode
+                    // above was strict UTF-8, so this is
+                    // lossless).
+                    Some(PickleValue::Str(text)) => text.into_bytes(),
                     _ => {
                         return Err(shape(format!("a segment for '{path}' has no bytes prefix")));
                     }
@@ -1727,6 +1752,81 @@ mod tests {
         archive.extend_from_slice(&zlib_compress(&pickle));
         let (root, result) = run("memo-get-miss", &archive);
         assert_eq!(result.unwrap_err().code, ErrorCode::UnsupportedTarget);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_short_binstring_paths() {
+        // An index whose path string uses the protocol-0
+        // SHORT_BINSTRING opcode (the One.Iced.Latte shape).
+        let header_len = 34usize;
+        let stored: &[u8] = b"data";
+        let mut pickle = Vec::new();
+        pickle.extend_from_slice(b"\x80\x02");
+        pickle.push(b'}');
+        pickle.push(0x94);
+        pickle.push(b'U');
+        pickle.push(5);
+        pickle.extend_from_slice(b"a.bin");
+        pickle.push(b']');
+        pickle.push(0x94);
+        pickle.push(b'J');
+        pickle.extend_from_slice(&((header_len as i32) ^ KEY as i32).to_le_bytes());
+        pickle.push(b'J');
+        pickle.extend_from_slice(&(((2 + stored.len()) as i32) ^ KEY as i32).to_le_bytes());
+        pickle.push(b'C');
+        pickle.push(2);
+        pickle.extend_from_slice(b"AB");
+        pickle.push(0x87);
+        pickle.push(0x94);
+        pickle.push(b'a');
+        pickle.push(b's');
+        pickle.push(b'.');
+        let index_at = header_len + stored.len();
+        let mut archive = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        archive.extend_from_slice(stored);
+        archive.extend_from_slice(&zlib_compress(&pickle));
+        let (root, out, result) = run_extract("short-binstring", &archive);
+        result.unwrap();
+        assert_eq!(fs::read(out.join("a.bin")).unwrap(), b"ABdata");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_string_prefix_segments() {
+        // A 3.0 index whose segment prefix is a string
+        // value rather than bytes (protocol-0 lineage).
+        let header_len = 34usize;
+        let stored: &[u8] = b"data";
+        let mut pickle = Vec::new();
+        pickle.extend_from_slice(b"\x80\x02");
+        pickle.push(b'}');
+        pickle.push(0x94);
+        pickle.push(0x8C);
+        pickle.push(5);
+        pickle.extend_from_slice(b"a.bin");
+        pickle.push(0x94);
+        pickle.push(b']');
+        pickle.push(0x94);
+        pickle.push(b'J');
+        pickle.extend_from_slice(&((header_len as i32) ^ KEY as i32).to_le_bytes());
+        pickle.push(b'J');
+        pickle.extend_from_slice(&(((2 + stored.len()) as i32) ^ KEY as i32).to_le_bytes());
+        pickle.push(b'U');
+        pickle.push(2);
+        pickle.extend_from_slice(b"AB");
+        pickle.push(0x87);
+        pickle.push(0x94);
+        pickle.push(b'a');
+        pickle.push(b's');
+        pickle.push(b'.');
+        let index_at = header_len + stored.len();
+        let mut archive = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        archive.extend_from_slice(stored);
+        archive.extend_from_slice(&zlib_compress(&pickle));
+        let (root, out, result) = run_extract("string-prefix", &archive);
+        result.unwrap();
+        assert_eq!(fs::read(out.join("a.bin")).unwrap(), b"ABdata");
         fs::remove_dir_all(&root).ok();
     }
 }
