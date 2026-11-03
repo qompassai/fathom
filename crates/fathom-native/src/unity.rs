@@ -286,6 +286,12 @@ struct SfCursor<'a> {
 }
 
 impl<'a> SfCursor<'a> {
+    /// Align the position to a 4-byte boundary (the
+    /// alignment object rows use from version 14).
+    fn align_stream(&mut self) {
+        self.position = self.position.next_multiple_of(4);
+    }
+
     fn read_bytes(&mut self, count: usize) -> Result<&'a [u8], FathomError> {
         let end = self
             .position
@@ -416,6 +422,23 @@ fn sf_summary_json(summary: &SfSummary) -> Value {
 /// Skip one type tree (SPEC §7.5): node headers then the
 /// string blob. Tree bytes are never expanded into types.
 fn skip_type_tree(cursor: &mut SfCursor, version: u32) -> Result<(), FathomError> {
+    if version >= 12 || version == 10 {
+        // Blob layout (verified against the UnityPy
+        // reader): node count, string-buffer size,
+        // fixed-size nodes (28 bytes, 36 with the ref-type
+        // hash from version 18), then the string buffer.
+        let node_count = cursor.read_u32()?;
+        let buffer_size = cursor.read_u32()?;
+        let node_bytes = if version >= 18 { 36 } else { 28 };
+        let nodes_bytes = (node_count as usize)
+            .checked_mul(node_bytes)
+            .ok_or_else(|| resource("type tree node table overflows"))?;
+        cursor.read_bytes(nodes_bytes)?;
+        cursor.read_bytes(buffer_size as usize)?;
+        return Ok(());
+    }
+    // Pre-blob layout as modelled by the original reader;
+    // no real pre-blob file has been verified against it.
     let node_count = cursor.read_u32()?;
     for _ in 0..node_count {
         cursor.read_bytes(2)?; // node version
@@ -442,56 +465,47 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
         return Err(truncated("serialized file is shorter than its header"));
     }
     let be_u32 = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
-    let (version, _file_size, data_offset) = {
-        // Version sits at offset 8 for versions < 22; the
-        // version-22 header moves file size before it. The
-        // version at offset 8 for a v22 file reads as the low
-        // half of the i64 file size — so probe: if the
-        // offset-8 value is in range AND the offset-4 file
-        // size equals the byte length, it is a <22 header;
-        // else try the v22 layout.
-        let v_early = be_u32(8);
-        let size_early = be_u32(4);
-        if (SF_VERSION_MIN..=21).contains(&v_early) && u64::from(size_early) == bytes.len() as u64 {
-            (v_early, u64::from(size_early), u64::from(be_u32(12)))
-        } else if bytes.len() >= 24 {
-            let size22 = i64::from_be_bytes(bytes[4..12].try_into().unwrap());
-            let v22 = be_u32(12);
-            if v22 == 22 && size22 == bytes.len() as i64 {
-                (v22, size22 as u64, {
-                    i64::from_be_bytes(bytes[16..24].try_into().unwrap()) as u64
-                })
-            } else if (SF_VERSION_MIN..=SF_VERSION_MAX).contains(&v_early) {
-                // Trust the early version read; the size
-                // disagreement is the caller's fact, not a
-                // parse barrier.
-                (v_early, u64::from(size_early), u64::from(be_u32(12)))
-            } else {
-                return Err(unsupported(format!(
-                    "serialized file version cannot be established from the header (offset-8 value {v_early})"
-                )));
-            }
-        } else {
-            return Err(unsupported(format!(
-                "serialized file version {v_early} is not implemented (supported: {SF_VERSION_MIN}..={SF_VERSION_MAX})"
-            )));
-        }
-    };
+    // The header layout is fixed (verified 2026-11-02
+    // against real version-22 files and the UnityPy
+    // reader, discharging the retroactive-fixture debt):
+    // four big-endian u32s (metadata size, file size,
+    // version at offset 8, data offset), the endianness
+    // byte at 16 with three reserved bytes, and — version
+    // 22 only — an extended tail (u32 metadata size at 20,
+    // i64 file size at 24, i64 data offset at 32, i64
+    // unknown at 40) before the metadata at offset 48.
+    // Before 22 the legacy u32 fields are authoritative;
+    // at 22 the extended fields replace them and the
+    // legacy size/offset fields read as zero.
+    let version = be_u32(8);
     if !(SF_VERSION_MIN..=SF_VERSION_MAX).contains(&version) {
         return Err(unsupported(format!(
             "serialized file version {version} is not implemented (supported: {SF_VERSION_MIN}..={SF_VERSION_MAX})"
         )));
     }
-    let header_len = if version >= 22 { 24 } else { 16 };
+    let (data_offset, metadata_start) = if version >= 22 {
+        if bytes.len() < 48 {
+            return Err(truncated(
+                "serialized file is shorter than its version-22 header",
+            ));
+        }
+        let data_offset = i64::from_be_bytes(bytes[32..40].try_into().unwrap());
+        if data_offset < 0 {
+            return Err(mismatch("version-22 data offset is negative"));
+        }
+        (data_offset as u64, 48usize)
+    } else {
+        (u64::from(be_u32(12)), 20usize)
+    };
     let endian_byte = bytes
-        .get(header_len)
+        .get(16)
         .copied()
         .ok_or_else(|| truncated("serialized file ends before the endianness byte"))?;
     let little = endian_byte == 0;
     let mut cursor = SfCursor {
         bytes,
         little,
-        position: header_len + 4, // endianness byte + 3 reserved
+        position: metadata_start,
     };
     let unity_version = if version >= 7 {
         Some(cursor.read_cstring()?)
@@ -515,21 +529,36 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
     let mut types = Vec::with_capacity(type_count as usize);
     for _ in 0..type_count {
         let class_id = cursor.read_i32()?;
-        let (is_stripped, script_type_index) = if version >= 16 {
+        let (_is_stripped, script_type_index) = if version >= 16 {
             (cursor.read_u8()? != 0, cursor.read_i16()?)
         } else {
             (false, -1)
         };
-        let type_hash = if version >= 13 && (class_id == 114 || is_stripped || class_id < 0) {
-            if class_id == 114 || (version < 16 && class_id < 0) {
+        let type_hash = if version >= 13 {
+            if (version >= 16 && class_id == 114) || (version < 16 && class_id < 0) {
                 cursor.read_bytes(16)?; // script id
             }
+            // The old type hash follows for every type.
             Some(hex_bytes(cursor.read_bytes(16)?))
         } else {
             None
         };
         if enable_type_tree {
             skip_type_tree(&mut cursor, version)?;
+            if version >= 21 {
+                // Type dependencies (plain types; the
+                // reader does not walk ref types).
+                let dependency_count = cursor.read_i32()?;
+                if dependency_count < 0 {
+                    return Err(mismatch(
+                        "serialized type declares a negative dependency count",
+                    ));
+                }
+                let dependency_bytes = (dependency_count as usize)
+                    .checked_mul(4)
+                    .ok_or_else(|| resource("serialized type dependency list overflows"))?;
+                cursor.read_bytes(dependency_bytes)?;
+            }
         }
         types.push(json!({
             "class_id": class_id,
@@ -543,6 +572,9 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
     let mut objects_by_class_map: std::collections::BTreeMap<String, u64> = Default::default();
     let mut objects_truncated = false;
     for index in 0..object_count {
+        if version >= 14 {
+            cursor.align_stream();
+        }
         let path_id = if version >= 14 {
             cursor.read_i64()?
         } else {
@@ -555,26 +587,45 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
         };
         let byte_size = cursor.read_u32()?;
         let type_index = cursor.read_i32()?;
-        let class_id = if version >= 11 {
+        // Before version 16 the row carries its class id;
+        // from 16 on, the class comes from the type row
+        // and the row holds no class bytes.
+        let class_id = if version < 16 {
             Some(cursor.read_u16()?)
         } else {
             None
         };
+        if version < 11 {
+            cursor.read_u16()?; // is_destroyed (skipped)
+        }
+        // The row's script type index exists only in
+        // versions 11..17; later versions carry it solely
+        // in the type row.
+        let row_script_type_index = if (11..17).contains(&version) {
+            Some(cursor.read_i16()?)
+        } else {
+            None
+        };
+        if version == 15 || version == 16 {
+            cursor.read_u8()?; // is_stripped (skipped)
+        }
+        let type_row = types.get(usize::try_from(type_index).unwrap_or(usize::MAX));
         let census_class = match class_id {
             Some(id) => i64::from(id),
-            None => types
-                .get(usize::try_from(type_index).unwrap_or(usize::MAX))
+            None => type_row
                 .and_then(|row| row["class_id"].as_i64())
                 .unwrap_or(-1),
         };
         *objects_by_class_map
             .entry(census_class.to_string())
             .or_insert(0) += 1;
-        let script_type_index = if version >= 16 {
-            cursor.read_i16()?
-        } else {
-            -1
-        };
+        let script_type_index = row_script_type_index
+            .or_else(|| {
+                type_row
+                    .and_then(|row| row["script_type_index"].as_i64())
+                    .and_then(|value| i16::try_from(value).ok())
+            })
+            .unwrap_or(-1);
         if (index as usize) < UNITY_OBJECTS_MAX {
             payloads.push(SfPayload {
                 byte_size,
@@ -1093,7 +1144,8 @@ fn extract_serialized(
     let summary = parse_serialized_file(bytes)?;
     let subdir_name = safe_file_name(node_key, "serialized");
     let subdir = out_dir.join(&subdir_name);
-    std::fs::create_dir_all(&subdir).map_err(|error| io_error("create", &subdir, error))?;
+    std::fs::create_dir_all(&subdir)
+        .map_err(|error| io_error("create", &subdir, error))?;
     for payload in &summary.payloads {
         if !matches!(
             payload.class_id,
@@ -1101,15 +1153,7 @@ fn extract_serialized(
         ) {
             continue;
         }
-        extract_object(
-            &summary,
-            bytes,
-            payload,
-            node_key,
-            &subdir_name,
-            &subdir,
-            state,
-        )?;
+        extract_object(&summary, bytes, payload, node_key, &subdir_name, &subdir, state)?;
     }
     Ok(())
 }
@@ -1237,7 +1281,9 @@ fn read_serialized_bytes<'a>(
     let content = bytes.get(content_start..content_end)?;
     let field_len = 4usize.checked_add(length)?;
     let aligned_len = field_len.checked_add(3)? / 4 * 4;
-    *position = field_start.checked_add(aligned_len)?.min(bytes.len());
+    *position = field_start
+        .checked_add(aligned_len)?
+        .min(bytes.len());
     Some(content)
 }
 
@@ -1384,7 +1430,10 @@ fn extract_texture(
     mut entry: Value,
 ) -> Result<(), FathomError> {
     let metadata = parse_texture_prefix(slice, summary.little);
-    let file_name = match metadata.as_ref().and_then(|meta| meta["name"].as_str()) {
+    let file_name = match metadata
+        .as_ref()
+        .and_then(|meta| meta["name"].as_str())
+    {
         Some(name) => format!(
             "{}.tex2d.bin",
             safe_file_name(name, &format!("texture2d_{}", payload.path_id))
@@ -1392,8 +1441,9 @@ fn extract_texture(
         None => format!("texture2d_{}.bin", payload.path_id),
     };
     entry["payload_form"] = json!("raw_object");
-    entry["pixel_data"] =
-        json!("not_decoded — image-data placement requires the type tree; raw payload retained");
+    entry["pixel_data"] = json!(
+        "not_decoded — image-data placement requires the type tree; raw payload retained"
+    );
     entry["texture"] = metadata.unwrap_or(Value::Null);
     match write_budgeted(state, subdir, &file_name, slice)? {
         Some(digest) => {
@@ -1444,9 +1494,8 @@ fn extract_mono_behaviour(
     }
     let node_value = entry["node"].clone();
     state.entries.push(entry);
-    for (index, (offset, length, source)) in carve_moc3_spans(slice, summary.little)
-        .into_iter()
-        .enumerate()
+    for (index, (offset, length, source)) in
+        carve_moc3_spans(slice, summary.little).into_iter().enumerate()
     {
         let carved = &slice[offset..offset + length];
         let carve_name = format!("monobehaviour_{}_carve{index}.moc3", payload.path_id);
@@ -1517,10 +1566,11 @@ fn load_blocks_info(
     )?;
     let info_bytes = match compression {
         0 => stored_info,
-        _ => {
-            lz4_flex::block::decompress(&stored_info, header.uncompressed_blocks_info_size as usize)
-                .map_err(|error| mismatch(format!("blocks info does not decompress: {error}")))?
-        }
+        _ => lz4_flex::block::decompress(
+            &stored_info,
+            header.uncompressed_blocks_info_size as usize,
+        )
+        .map_err(|error| mismatch(format!("blocks info does not decompress: {error}")))?,
     };
     if info_bytes.len() != header.uncompressed_blocks_info_size as usize {
         return Err(mismatch(
@@ -1585,9 +1635,7 @@ fn extract_from_bundle(
         };
         if node.flags & 4 != 0 {
             if let Err(error) = extract_serialized(&node.path, &node_data, out_dir, state) {
-                state
-                    .notes
-                    .push(format!("{}: {}", node.path, error.message));
+                state.notes.push(format!("{}: {}", node.path, error.message));
             }
         } else {
             let file_name = safe_file_name(&node.path, "node");
@@ -1627,7 +1675,10 @@ pub fn extract_unity_bundle(
     args: &Value,
 ) -> Result<Value, FathomError> {
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
-    let out_dir = paths::validate_output_dir(config, Path::new(require_str(args, "output_dir")?))?;
+    let out_dir = paths::validate_output_dir(
+        config,
+        Path::new(require_str(args, "output_dir")?),
+    )?;
     let subject = subject_for_file_with_bound(&path, ARCHIVE_TARGET_BYTES_MAX)?;
     let subject_sha256 = subject.sha256.clone();
     let file_len = subject.size_bytes;
@@ -1650,14 +1701,7 @@ pub fn extract_unity_bundle(
     let mut facts = json!({ "target": path.display().to_string() });
     if prefix.starts_with(b"UnityFS\0") {
         let header = parse_bundle_header(&prefix)?;
-        extract_from_bundle(
-            &mut reader,
-            &header,
-            file_len,
-            &out_dir,
-            &mut state,
-            &mut facts,
-        )?;
+        extract_from_bundle(&mut reader, &header, file_len, &out_dir, &mut state, &mut facts)?;
     } else {
         let bytes = reader.read_range(0, file_len)?;
         facts["container"] = json!("serialized_file");
@@ -1761,31 +1805,37 @@ mod tests {
             if class_id == 114 {
                 body.extend_from_slice(&[0x11; 16]); // script id
                 body.extend_from_slice(&[0x22; 16]); // type hash
+            } else {
+                body.extend_from_slice(&[0x33; 16]); // type hash
             }
             if with_trees {
+                // Blob tree: node count, string-buffer
+                // size, fixed-size nodes, buffer bytes.
+                let blob = b"GameObject\0Name\0";
                 body.extend_from_slice(&1_u32.to_le_bytes()); // nodes
+                body.extend_from_slice(&(blob.len() as u32).to_le_bytes());
                 body.extend_from_slice(&1_u16.to_le_bytes()); // version
                 body.push(0); // level
                 body.push(0); // is_array
-                body.extend_from_slice(&0_u16.to_le_bytes());
-                body.extend_from_slice(&5_u16.to_le_bytes());
+                body.extend_from_slice(&0_u32.to_le_bytes()); // type offset
+                body.extend_from_slice(&5_u32.to_le_bytes()); // name offset
                 body.extend_from_slice(&(-1_i64).to_le_bytes()); // byte size
-                body.extend_from_slice(&0_u32.to_le_bytes()); // index
+                body.extend_from_slice(&0_i32.to_le_bytes()); // index
                 body.extend_from_slice(&0_i32.to_le_bytes()); // flags
                 body.extend_from_slice(&0_u64.to_le_bytes()); // ref hash (v>=18)
-                let blob = b"GameObject\0Name\0";
-                body.extend_from_slice(&(blob.len() as u32).to_le_bytes());
                 body.extend_from_slice(blob);
+                body.extend_from_slice(&0_i32.to_le_bytes()); // type dependencies
             }
         }
         body.extend_from_slice(&3_u32.to_le_bytes()); // object count
+        while body.len() % 4 != 0 {
+            body.push(0); // object rows start 4-aligned
+        }
         for i in 0..3_i64 {
             body.extend_from_slice(&(1000 + i).to_le_bytes()); // path_id
             body.extend_from_slice(&(i as u32 * 16).to_le_bytes()); // byte_start
             body.extend_from_slice(&16_u32.to_le_bytes()); // byte_size
             body.extend_from_slice(&0_i32.to_le_bytes()); // type_index
-            body.extend_from_slice(&1_u16.to_le_bytes()); // class_id
-            body.extend_from_slice(&(-1_i16).to_le_bytes()); // script idx
         }
         let total = 16 + 4 + body.len();
         let mut out: Vec<u8> = Vec::new();
@@ -1835,27 +1885,39 @@ mod tests {
             if class_id == 114 {
                 body.extend_from_slice(&[0x33; 16]);
                 body.extend_from_slice(&[0x44; 16]);
+            } else {
+                body.extend_from_slice(&[0x55; 16]); // type hash
             }
             body.extend_from_slice(&0_u32.to_le_bytes()); // tree nodes: 0
             body.extend_from_slice(&0_u32.to_le_bytes()); // tree blob: 0
+            body.extend_from_slice(&0_i32.to_le_bytes()); // type dependencies
         }
         body.extend_from_slice(&5_u32.to_le_bytes());
+        while body.len() % 4 != 0 {
+            body.push(0); // object rows start 4-aligned
+        }
         for i in 0..5_i64 {
             body.extend_from_slice(&(2000 + i).to_le_bytes());
             body.extend_from_slice(&(i as u64 * 32).to_le_bytes()); // byte_start u64
             body.extend_from_slice(&32_u32.to_le_bytes());
             body.extend_from_slice(&0_i32.to_le_bytes());
-            body.extend_from_slice(&1_u16.to_le_bytes());
-            body.extend_from_slice(&(-1_i16).to_le_bytes());
         }
-        let total = 24 + 4 + body.len();
+        // The real version-22 header (48 bytes): legacy
+        // u32 fields, endianness byte + reserved, then the
+        // extended tail (metadata size, file size, data
+        // offset, unknown).
+        let total = 48 + body.len();
         let mut out: Vec<u8> = Vec::new();
-        out.extend_from_slice(&0_u32.to_be_bytes());
-        out.extend_from_slice(&(total as i64).to_be_bytes());
-        out.extend_from_slice(&22_u32.to_be_bytes());
-        out.extend_from_slice(&0_i64.to_be_bytes());
-        out.push(0);
-        out.extend_from_slice(&[0; 3]);
+        out.extend_from_slice(&0_u32.to_be_bytes()); // legacy metadata size
+        out.extend_from_slice(&0_u32.to_be_bytes()); // legacy file size
+        out.extend_from_slice(&22_u32.to_be_bytes()); // version
+        out.extend_from_slice(&0_u32.to_be_bytes()); // legacy data offset
+        out.push(0); // little-endian
+        out.extend_from_slice(&[0; 3]); // reserved
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes()); // metadata size
+        out.extend_from_slice(&(total as i64).to_be_bytes()); // file size
+        out.extend_from_slice(&(total as i64).to_be_bytes()); // data offset
+        out.extend_from_slice(&0_i64.to_be_bytes()); // unknown
         out.extend_from_slice(&body);
         assert_eq!(out.len(), total);
         out
@@ -2003,7 +2065,10 @@ mod tests {
         assert_eq!(summary["endianness"], "little");
         assert_eq!(summary["type_count"], 2);
         assert_eq!(summary["types"][0]["class_id"], 1);
-        assert_eq!(summary["types"][0]["type_hash"], Value::Null);
+        assert_eq!(
+            summary["types"][0]["type_hash"],
+            "33333333333333333333333333333333"
+        );
         assert_eq!(summary["types"][1]["class_id"], 114);
         assert_eq!(
             summary["types"][1]["type_hash"],
@@ -2408,6 +2473,7 @@ mod tests {
             meta.extend_from_slice(&class_id.to_le_bytes());
             meta.push(0); // is_stripped
             meta.extend_from_slice(&(-1_i16).to_le_bytes());
+            meta.extend(std::iter::repeat_n(0xEF_u8, 16)); // type hash
         }
         meta.extend_from_slice(&114_i32.to_le_bytes());
         meta.push(0);
@@ -2415,16 +2481,16 @@ mod tests {
         meta.extend(std::iter::repeat_n(0xAB_u8, 16)); // script id
         meta.extend(std::iter::repeat_n(0xCD_u8, 16)); // type hash
         meta.extend_from_slice(&3_u32.to_le_bytes()); // object count
+        while meta.len() % 4 != 0 {
+            meta.push(0); // object rows start 4-aligned
+        }
         let sizes = [text_asset.len(), texture.len(), mono.len()];
-        let classes = [49_u16, 28, 114];
         let mut start = 0_u32;
         for index in 0..3 {
             meta.extend_from_slice(&(index as i64 + 1).to_le_bytes()); // path_id
             meta.extend_from_slice(&start.to_le_bytes());
             meta.extend_from_slice(&(sizes[index] as u32).to_le_bytes());
             meta.extend_from_slice(&(index as i32).to_le_bytes()); // type_index
-            meta.extend_from_slice(&classes[index].to_le_bytes());
-            meta.extend_from_slice(&(-1_i16).to_le_bytes());
             start += sizes[index] as u32;
         }
         let data_offset = 20 + meta.len();
@@ -2504,7 +2570,10 @@ mod tests {
             .iter()
             .find(|entry| entry["class"] == "MonoBehaviour")
             .unwrap();
-        assert_eq!(mono["type_hash"], "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+        assert_eq!(
+            mono["type_hash"],
+            "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+        );
         let carve = entries
             .iter()
             .find(|entry| entry["kind"] == "moc3_carve")
@@ -2529,8 +2598,10 @@ mod tests {
             root,
         ))
         .unwrap();
-        let outside =
-            std::env::temp_dir().join(format!("fathom-extract-outside-{}", std::process::id()));
+        let outside = std::env::temp_dir().join(format!(
+            "fathom-extract-outside-{}",
+            std::process::id()
+        ));
         let args = json!({
             "output_dir": outside.display().to_string(),
             "target": target.display().to_string(),
