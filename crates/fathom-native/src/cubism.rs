@@ -45,11 +45,12 @@ use fathom_core::registry::{Registry, require_str};
 const CANVAS_INFO_ENTRY: usize = 1;
 const COUNT_INFO_ENTRY: usize = 0;
 const DRAWABLE_IDS_ENTRY: usize = 33;
+const PARAMETER_DEFAULTS_ENTRY: usize = 53;
 const PARAMETER_IDS_ENTRY: usize = 50;
+const PARAMETER_MAXIMA_ENTRY: usize = 51;
+const PARAMETER_MINIMA_ENTRY: usize = 52;
 const PART_IDS_ENTRY: usize = 3;
 
-/// The estate's standard Cubism parameter vocabulary
-/// (the comparison set the hand census uses).
 /// The standard Cubism parameter vocabulary (the hand
 /// census's STANDARD_40) plus the three channel names the
 /// estate's ground-truth census counts as standard on the
@@ -433,6 +434,24 @@ fn read_f32le(bytes: &[u8], offset: usize) -> Result<f32, FathomError> {
     Ok(f32::from_bits(read_u32le(bytes, offset)?))
 }
 
+/// Read `count` little-endian f32 values at a file offset
+/// taken from the moc3 offset table.
+fn read_f32_array(bytes: &[u8], offset: u32, count: u32) -> Result<Vec<f32>, FathomError> {
+    let start = offset as usize;
+    let end = start
+        .checked_add((count as usize).saturating_mul(4))
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| truncated("moc3 float array overruns the file"))?;
+    let slice = &bytes[start..end];
+    let mut values = Vec::with_capacity(count as usize);
+    for index in 0..count as usize {
+        values.push(f32::from_le_bytes(
+            slice[index * 4..index * 4 + 4].try_into().unwrap(),
+        ));
+    }
+    Ok(values)
+}
+
 /// One 64-byte ID slot: printable ASCII up to the first NUL
 /// (or the full slot), never empty.
 fn parse_id_slot(slot: &[u8], table: &str) -> Result<String, FathomError> {
@@ -517,6 +536,11 @@ struct Moc3 {
     deformer_split_consistent: bool,
     drawables: Vec<String>,
     id_table_offsets: [u32; 3],
+    /// (min, max, default) per parameter in parameter
+    /// order, from the moc3's own range arrays; None when
+    /// the offset table is too short to hold them or a
+    /// value is not finite.
+    parameter_ranges: Option<Vec<(f32, f32, f32)>>,
     parameters: Vec<String>,
     parent_indices: Option<(Vec<i32>, u32)>,
     parts: Vec<String>,
@@ -616,6 +640,32 @@ fn parse_moc3(bytes: &[u8]) -> Result<Moc3, FathomError> {
     let drawable_ids = read_id_table(bytes, offsets[DRAWABLE_IDS_ENTRY], drawables, "drawable")?;
     let parameter_ids =
         read_id_table(bytes, offsets[PARAMETER_IDS_ENTRY], parameters, "parameter")?;
+    // Parameter ranges (verified 2026-11-02 against all
+    // nine ground-truth models: min <= default <= max
+    // holds for every parameter, and the values carry the
+    // models' own semantics — eye-open [0, 1] default 1,
+    // angles ±30 default 0).
+    let parameter_ranges = if entry_count > PARAMETER_DEFAULTS_ENTRY {
+        let maxima = read_f32_array(bytes, offsets[PARAMETER_MAXIMA_ENTRY], parameters)?;
+        let minima = read_f32_array(bytes, offsets[PARAMETER_MINIMA_ENTRY], parameters)?;
+        let defaults = read_f32_array(bytes, offsets[PARAMETER_DEFAULTS_ENTRY], parameters)?;
+        let ranges: Vec<(f32, f32, f32)> = minima
+            .into_iter()
+            .zip(maxima)
+            .zip(defaults)
+            .map(|((min, max), default)| (min, max, default))
+            .collect();
+        if ranges
+            .iter()
+            .all(|(min, max, default)| min.is_finite() && max.is_finite() && default.is_finite())
+        {
+            Some(ranges)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let parent_indices = find_parent_indices(bytes, &offsets, drawables, parts);
     Ok(Moc3 {
         canvas,
@@ -627,6 +677,7 @@ fn parse_moc3(bytes: &[u8]) -> Result<Moc3, FathomError> {
             offsets[DRAWABLE_IDS_ENTRY],
             offsets[PARAMETER_IDS_ENTRY],
         ],
+        parameter_ranges,
         parameters: parameter_ids,
         parent_indices,
         parts: parts_ids,
@@ -759,8 +810,14 @@ pub fn census_cubism_model(
     }
     if cdi3.is_none() {
         unknowns.push((
-            "parameter ranges".to_string(),
-            "no .cdi3.json in the model directory; parameter display names, groups, and min/max/default ranges are unrecorded".to_string(),
+            "parameter display names and groups".to_string(),
+            "no .cdi3.json in the model directory; parameter display names and parameter groups are unrecorded (min/max/default ranges come from the moc3 itself)".to_string(),
+        ));
+    }
+    if moc.parameter_ranges.is_none() {
+        unknowns.push((
+            "moc3 parameter ranges".to_string(),
+            "the moc3 offset table does not carry readable finite min/max/default arrays at the verified entries; parameter ranges are unrecorded".to_string(),
         ));
     }
     if moc.canvas.is_none() {
@@ -832,8 +889,28 @@ pub fn census_cubism_model(
                 "parts": moc.id_table_offsets[0],
             },
             "parameters": moc.parameters,
+            "parameter_ranges": moc.parameter_ranges.as_ref().map(|ranges| {
+                ranges
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (min, max, default))| {
+                        json!({
+                            "default": default,
+                            "id": moc.parameters[index],
+                            "index": index,
+                            "max": max,
+                            "min": min,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            }),
             "parent_indices_offset": moc.parent_indices.as_ref().map(|(_, offset)| *offset),
             "parts": moc.parts,
+            "ranges_consistent": moc.parameter_ranges.as_ref().map(|ranges| {
+                ranges
+                    .iter()
+                    .all(|(min, max, default)| min <= max && min <= default && default <= max)
+            }),
             "sha256": subject_sha256,
             "standard_ids_present": standard_parameters(&moc.parameters),
             "version": moc.version,
@@ -878,6 +955,7 @@ pub fn census_cubism_model(
             "moc3_file": moc_relative,
             "model3_present": model3.is_some(),
             "parameter_count": moc.counts[5],
+            "parameter_ranges_present": moc.parameter_ranges.is_some(),
             "parts_count": moc.counts[0],
         }),
     ));
@@ -935,14 +1013,29 @@ mod tests {
         parameters: &[&str],
         parents: &[i32],
     ) -> Vec<u8> {
+        let ranges = vec![(0.0_f32, 1.0_f32, 0.0_f32); parameters.len()];
+        build_moc3_with_ranges(parts, drawables, parameters, parents, &ranges)
+    }
+
+    fn build_moc3_with_ranges(
+        parts: &[&str],
+        drawables: &[&str],
+        parameters: &[&str],
+        parents: &[i32],
+        ranges: &[(f32, f32, f32)],
+    ) -> Vec<u8> {
         assert_eq!(drawables.len(), parents.len());
+        assert_eq!(parameters.len(), ranges.len());
         let count_info_at = 64 + ENTRY_COUNT * 4;
         let canvas_at = count_info_at + 256;
         let parts_at = canvas_at + 720;
         let drawables_at = parts_at + parts.len() * CUBISM_ID_SLOT_BYTES;
         let parents_at = drawables_at + drawables.len() * CUBISM_ID_SLOT_BYTES;
         let parameters_at = parents_at + parents.len() * 4;
-        let total = parameters_at + parameters.len() * CUBISM_ID_SLOT_BYTES;
+        let maxima_at = parameters_at + parameters.len() * CUBISM_ID_SLOT_BYTES;
+        let minima_at = maxima_at + parameters.len() * 4;
+        let defaults_at = minima_at + parameters.len() * 4;
+        let total = defaults_at + parameters.len() * 4;
         let mut out = vec![0_u8; total];
         out[..4].copy_from_slice(b"MOC3");
         out[4] = 5;
@@ -953,6 +1046,9 @@ mod tests {
             (DRAWABLE_IDS_ENTRY, drawables_at),
             (DRAWABLE_IDS_ENTRY + 1, parents_at),
             (PARAMETER_IDS_ENTRY, parameters_at),
+            (PARAMETER_MAXIMA_ENTRY, maxima_at),
+            (PARAMETER_MINIMA_ENTRY, minima_at),
+            (PARAMETER_DEFAULTS_ENTRY, defaults_at),
         ] {
             write_u32(&mut out, 64 + entry * 4, offset as u32);
         }
@@ -984,6 +1080,11 @@ mod tests {
         }
         out[parameters_at..parameters_at + parameters.len() * CUBISM_ID_SLOT_BYTES]
             .copy_from_slice(&id_table(parameters));
+        for (index, (min, max, default)) in ranges.iter().enumerate() {
+            write_f32(&mut out, maxima_at + index * 4, *max);
+            write_f32(&mut out, minima_at + index * 4, *min);
+            write_f32(&mut out, defaults_at + index * 4, *default);
+        }
         out
     }
 
@@ -1036,7 +1137,7 @@ mod tests {
     }
 
     fn fixture_moc3() -> Vec<u8> {
-        build_moc3(
+        build_moc3_with_ranges(
             &["PartBody", "PartEye"],
             &["ArtMeshEye", "ArtMeshBody"],
             &[
@@ -1047,6 +1148,13 @@ mod tests {
                 "BlinkCustom",
             ],
             &[1, 0],
+            &[
+                (-30.0, 30.0, 0.0),
+                (0.0, 1.0, 1.0),
+                (-1.0, 1.0, 0.0),
+                (0.0, 1.0, 0.0),
+                (0.0, 100.0, 50.0),
+            ],
         )
     }
 
@@ -1090,6 +1198,16 @@ mod tests {
         assert_eq!(census["moc3"]["counts"]["parameters"], 5);
         assert_eq!(census["moc3"]["counts"]["drawables"], 2);
         assert_eq!(census["moc3"]["counts"]["parts"], 2);
+        assert_eq!(census["moc3"]["ranges_consistent"], true);
+        assert_eq!(
+            census["moc3"]["parameter_ranges"][0],
+            json!({"default": 0.0, "id": "ParamAngleX", "index": 0, "max": 30.0, "min": -30.0})
+        );
+        assert_eq!(
+            census["moc3"]["parameter_ranges"][1],
+            json!({"default": 1.0, "id": "ParamEyeLOpen", "index": 1, "max": 1.0, "min": 0.0})
+        );
+        assert_eq!(census["moc3"]["parameter_ranges"][4]["default"], 50.0);
         assert_eq!(
             census["moc3"]["parameters"],
             json!([
@@ -1244,6 +1362,49 @@ mod tests {
         let (root, result) = run_model("empty-slot", &[("model.moc3", bytes)]);
         let error = result.unwrap_err();
         assert_eq!(error.code, ErrorCode::ArtifactIntegrityMismatch);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_range_default_outside_is_flagged_not_fatal() {
+        let ranges = vec![(0.0_f32, 1.0_f32, 7.0_f32); 5];
+        let bytes = build_moc3_with_ranges(
+            &["PartBody", "PartEye"],
+            &["ArtMeshEye", "ArtMeshBody"],
+            &[
+                "ParamAngleX",
+                "ParamEyeLOpen",
+                "ParamEyeBallX",
+                "ParamBreath",
+                "BlinkCustom",
+            ],
+            &[1, 0],
+            &ranges,
+        );
+        let (root, result) = run_model("range-outside", &[("model.moc3", bytes)]);
+        let value = result.unwrap();
+        let census = census_of(&value);
+        assert_eq!(census["moc3"]["ranges_consistent"], false);
+        assert_eq!(census["moc3"]["parameter_ranges"][0]["default"], 7.0);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_non_finite_range_value_drops_ranges() {
+        let mut bytes = fixture_moc3();
+        let maxima_at = read_u32le(&bytes, 64 + PARAMETER_MAXIMA_ENTRY * 4).unwrap() as usize;
+        bytes[maxima_at..maxima_at + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+        let (root, result) = run_model("range-nan", &[("model.moc3", bytes)]);
+        let value = result.unwrap();
+        let census = census_of(&value);
+        assert!(census["moc3"]["parameter_ranges"].is_null());
+        assert!(
+            value["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|unknown| unknown["aspect"] == "moc3 parameter ranges")
+        );
         fs::remove_dir_all(&root).ok();
     }
 }
