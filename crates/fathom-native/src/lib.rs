@@ -12,6 +12,7 @@ pub mod artifact;
 pub mod beam;
 pub mod cubism;
 pub mod engine;
+pub mod game;
 pub mod ghidra;
 pub mod godot;
 pub mod gpu;
@@ -287,6 +288,19 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(cubism::census_cubism_model),
+    );
+    registry.register(
+        descriptor(
+            "census_game_tree",
+            ToolClass::Observe,
+            "game",
+            "Game-tree census and unified extraction manifest: engine fingerprint \
+             with its evidence (Unity, Unreal, Ren'Py, RPG Maker, KiriKiri/Tyrano, \
+             GameMaker, Electron/NW.js), container inventory with SHA-256 and the \
+             reader that censuses each, and per-class asset counts",
+            target_schema(),
+        ),
+        Arc::new(game::census_game_tree),
     );
     registry.register(
         descriptor(
