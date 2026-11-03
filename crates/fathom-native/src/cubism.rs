@@ -1007,16 +1007,6 @@ mod tests {
     /// drawable parent indices, laid out like the shipped
     /// fixtures (count info first, canvas after it, ID
     /// tables at their format entries).
-    fn build_moc3(
-        parts: &[&str],
-        drawables: &[&str],
-        parameters: &[&str],
-        parents: &[i32],
-    ) -> Vec<u8> {
-        let ranges = vec![(0.0_f32, 1.0_f32, 0.0_f32); parameters.len()];
-        build_moc3_with_ranges(parts, drawables, parameters, parents, &ranges)
-    }
-
     fn build_moc3_with_ranges(
         parts: &[&str],
         drawables: &[&str],
