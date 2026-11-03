@@ -721,6 +721,7 @@ mod tests {
         let config = Config {
             allow_programs: Vec::new(),
             allow_tools: Vec::new(),
+            blender_program: None,
             ghidra_headless: None,
             http_bind: "127.0.0.1:8731".parse().unwrap(),
             signing_key_file: None,
