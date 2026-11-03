@@ -271,7 +271,11 @@ mod tests {
             ("y".to_string(), block("text", "inner", &[])),
         ]);
         let outcome = render(&tree);
-        assert!(outcome.markdown.contains("[unsupported block type: synced_block]"));
+        assert!(
+            outcome
+                .markdown
+                .contains("[unsupported block type: synced_block]")
+        );
         assert!(outcome.markdown.contains("inner"));
     }
 
