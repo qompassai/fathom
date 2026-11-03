@@ -29,6 +29,7 @@ pub mod python;
 pub mod renpy;
 pub mod rpgmaker;
 pub mod sections;
+pub mod spec;
 pub mod uasset;
 pub mod ui;
 pub mod unity;
@@ -2027,6 +2028,41 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::write::set_plate_comment),
+    );
+    registry.register(
+        descriptor(
+            "spec_record",
+            ToolClass::Execute,
+            "spec",
+            "Write, validate, or diff a fathom-spec/1 spec record (rebuild lane R11). \
+             operation \"write\" turns a census_cubism_model evidence envelope into a \
+             spec document under output_dir (requires title, fingerprint, author, \
+             origin_lane, content_label); \"validate\" checks a spec against the \
+             fathom-spec/1 contract and resolves evidence pointers when census is \
+             given; \"diff\" compares a spec against one model of a ground-truth \
+             census (requires reference, census, model). Specs carry statements and \
+             evidence pointers only — no copied code, text, or assets",
+            json!({
+                "type": "object",
+                "properties": {
+                    "author": {"type": "string", "description": "write: RE-side author for the separation record"},
+                    "both_sides": {"type": "string", "description": "write: honesty note when one agent worked both sides of the title"},
+                    "census": {"type": "string", "description": "validate/diff: census envelope path under a configured target root"},
+                    "content_label": {"type": "string", "enum": ["nsfw", "sfw"], "description": "write: Bloch content label"},
+                    "fingerprint": {"type": "string", "description": "write: title build fingerprint (SHA-256 hex)"},
+                    "model": {"type": "string", "description": "diff: model name inside the reference census"},
+                    "operation": {"type": "string", "enum": ["diff", "validate", "write"]},
+                    "origin_lane": {"type": "string", "description": "write: Bloch origin lane"},
+                    "output_dir": {"type": "string", "description": "write: output directory under a configured target root"},
+                    "reference": {"type": "string", "description": "diff: ground-truth census path under a configured target root"},
+                    "target": {"type": "string", "description": "Path under a configured target root (census envelope for write; spec for validate/diff)"},
+                    "title": {"type": "string", "description": "write: title id"},
+                },
+                "required": ["operation", "target"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(spec::spec_record),
     );
     registry.register(
         descriptor(
