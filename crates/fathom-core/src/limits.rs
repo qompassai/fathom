@@ -151,6 +151,15 @@ pub const GLTF_BYTES_MAX: u64 = 268_435_456;
 /// census.
 pub const GLTF_ITEMS_MAX: usize = 100_000;
 
+/// Largest single dialogue file the census will read.
+pub const DIALOGUE_FILE_BYTES_MAX: u64 = 67_108_864;
+
+/// Largest dialogue-file count in one census or dump.
+pub const DIALOGUE_FILES_MAX: usize = 4_096;
+
+/// Largest dialogue row count in one dump.
+pub const DIALOGUE_ROWS_MAX: usize = 1_000_000;
+
 /// first import (full auto-analysis of a subject with no imported
 /// project yet), seconds. First import of a large debug binary is
 /// measured in tens of minutes — a 76 MB Rust debug ELF took
