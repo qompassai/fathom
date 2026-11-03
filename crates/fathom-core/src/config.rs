@@ -38,10 +38,21 @@ pub struct ConfigFile {
     pub target_roots: Option<Vec<PathBuf>>,
 }
 
+/// Operator-configured Blender backend program, the
+/// external mesh-census extractor. Absent means the
+/// backend is unavailable.
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlenderProviderFile {
+    /// Filesystem path of the Blender executable.
+    pub program: Option<PathBuf>,
+}
+
 /// The `[providers]` table of the on-disk form.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProvidersFile {
+    pub blender: Option<BlenderProviderFile>,
     /// The YouTube ingest lane's provider block (YouTube-RE
     /// SPEC §4.3/§4.4: rendition and ASR are configuration,
     /// never per-call arguments).
@@ -190,6 +201,7 @@ impl VideoConfig {
 pub struct Config {
     pub allow_programs: Vec<String>,
     pub allow_tools: Vec<String>,
+    pub blender_program: Option<PathBuf>,
     pub ghidra_headless: Option<PathBuf>,
     pub http_bind: SocketAddr,
     pub signing_key_file: Option<PathBuf>,
@@ -251,8 +263,10 @@ impl Config {
         }
         target_roots.sort();
         target_roots.dedup();
+        let mut blender_program: Option<PathBuf> = None;
         let (video, web) = match form.providers {
             Some(providers) => {
+                blender_program = providers.blender.and_then(|blender| blender.program);
                 let video = match providers.video {
                     Some(video_form) => VideoConfig::from_file_form(video_form)?,
                     None => VideoConfig::default(),
@@ -268,6 +282,7 @@ impl Config {
         Ok(Config {
             allow_programs,
             allow_tools,
+            blender_program,
             ghidra_headless: form.ghidra_headless,
             http_bind,
             signing_key_file: form.signing_key_file,
@@ -308,6 +323,7 @@ impl Config {
         Config {
             allow_programs: Vec::new(),
             allow_tools: Vec::new(),
+            blender_program: None,
             ghidra_headless: None,
             http_bind: DEFAULT_HTTP_BIND.parse().expect("constant binds"),
             signing_key_file: None,
