@@ -114,7 +114,7 @@ fn opcode_name(byte: u8) -> String {
         0x90 => "FROZENSET",
         0x91 => "NEWOBJ_EX",
         0x92 => "STACK_GLOBAL",
-        0x93 => "MEMOIZE",
+        0x94 => "MEMOIZE",
         0x96 => "BYTEARRAY8",
         b'F' => "BINFLOAT",
         b'N' => "NONE",
@@ -126,6 +126,9 @@ fn opcode_name(byte: u8) -> String {
         b'c' => "GLOBAL",
         b'i' => "INST",
         b'o' => "OBJ",
+        b'g' => "GET",
+        b'h' => "BINGET",
+        b'j' => "LONG_BINGET",
         b'p' => "PUT",
         b'q' => "BINPUT",
         b'r' => "LONG_BINPUT",
@@ -207,6 +210,46 @@ impl<'a> Interpreter<'a> {
         }
         self.stack.push(value);
         Ok(())
+    }
+
+    /// Store the stack top in the memo at an explicit
+    /// index (PUT family). The memo is bounded by the
+    /// node cap; an explicit store also advances the
+    /// implicit MEMOIZE counter past the index so the
+    /// two families never collide.
+    fn memo_store(&mut self, index: u32) -> Result<(), FathomError> {
+        if self.memo.len() >= RPA_PICKLE_NODES_MAX {
+            return Err(resource(format!(
+                "renpy index memo over {RPA_PICKLE_NODES_MAX} entries"
+            )));
+        }
+        let top = self
+            .stack
+            .last()
+            .ok_or_else(|| shape("pickle PUT with an empty stack".to_string()))?
+            .clone();
+        let size = value_size(&top);
+        self.memo.insert(index, (top, size));
+        self.memo_next = self.memo_next.max(index.saturating_add(1));
+        Ok(())
+    }
+
+    fn memo_fetch(&mut self, index: u32) -> Result<(), FathomError> {
+        let (value, _) = self
+            .memo
+            .get(&index)
+            .ok_or_else(|| shape(format!("pickle memo miss at {index}")))?
+            .clone();
+        self.push(value)
+    }
+
+    fn read_memo_index_line(&mut self) -> Result<u32, FathomError> {
+        let line = self.read_line()?;
+        let text =
+            std::str::from_utf8(line).map_err(|_| shape("memo index is not text".to_string()))?;
+        text.trim()
+            .parse()
+            .map_err(|_| shape(format!("memo index '{text}' is not an integer")))
     }
 
     fn pop(&mut self) -> Result<PickleValue, FathomError> {
@@ -292,6 +335,11 @@ impl<'a> Interpreter<'a> {
                 b')' => self.push(PickleValue::Tuple(Vec::new()))?,
                 // MEMOIZE: remember the stack top.
                 0x94 => {
+                    if self.memo.len() >= RPA_PICKLE_NODES_MAX {
+                        return Err(resource(format!(
+                            "renpy index memo over {RPA_PICKLE_NODES_MAX} entries"
+                        )));
+                    }
                     let top = self
                         .stack
                         .last()
@@ -301,18 +349,25 @@ impl<'a> Interpreter<'a> {
                     self.memo.insert(self.memo_next, (top, size));
                     self.memo_next += 1;
                 }
-                b'h' | b'j' => {
+                b'g' | b'h' | b'j' => {
                     let index = if opcode == b'h' {
                         u32::from(self.read_byte()?)
-                    } else {
+                    } else if opcode == b'j' {
                         u32::from_le_bytes(self.read_bytes(4)?.try_into().unwrap())
+                    } else {
+                        self.read_memo_index_line()?
                     };
-                    let (value, _) = self
-                        .memo
-                        .get(&index)
-                        .ok_or_else(|| shape(format!("pickle memo miss at {index}")))?
-                        .clone();
-                    self.push(value)?;
+                    self.memo_fetch(index)?;
+                }
+                b'p' | b'q' | b'r' => {
+                    let index = if opcode == b'q' {
+                        u32::from(self.read_byte()?)
+                    } else if opcode == b'r' {
+                        u32::from_le_bytes(self.read_bytes(4)?.try_into().unwrap())
+                    } else {
+                        self.read_memo_index_line()?
+                    };
+                    self.memo_store(index)?;
                 }
                 b'J' => {
                     let value =
@@ -1579,6 +1634,99 @@ mod tests {
         let rows = extract_files(&mut file, file_len, &header, &files, &out, 5);
         assert_eq!(rows[0]["status"], "extracted");
         assert_eq!(rows[1]["status"], "skipped_budget");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// An RPA-3.0 whose index stores file one's segment
+    /// prefix in the memo and fetches it for file two —
+    /// the shape large Ren'Py archives take when the
+    /// pickler memoizes repeated objects.
+    fn build_30_memo(binary_memo: bool) -> Vec<u8> {
+        let header_len = 34usize;
+        let stored1: &[u8] = b"first-";
+        let stored2: &[u8] = b"second";
+        let off1 = header_len as i32;
+        let off2 = (header_len + stored1.len()) as i32;
+        let len1 = (2 + stored1.len()) as i32;
+        let len2 = (2 + stored2.len()) as i32;
+        let mut pickle = Vec::new();
+        pickle.extend_from_slice(b"\x80\x02");
+        pickle.push(b'}');
+        pickle.push(0x94);
+        for (path, off, len, store) in [("a.bin", off1, len1, true), ("b.bin", off2, len2, false)] {
+            pickle.push(0x8C);
+            pickle.push(path.len() as u8);
+            pickle.extend_from_slice(path.as_bytes());
+            pickle.push(0x94);
+            pickle.push(b']');
+            pickle.push(0x94);
+            pickle.push(b'J');
+            pickle.extend_from_slice(&(off ^ KEY as i32).to_le_bytes());
+            pickle.push(b'J');
+            pickle.extend_from_slice(&(len ^ KEY as i32).to_le_bytes());
+            if store {
+                pickle.push(b'C');
+                pickle.push(2);
+                pickle.extend_from_slice(b"AB");
+                if binary_memo {
+                    pickle.push(b'q');
+                    pickle.push(7);
+                } else {
+                    pickle.push(b'p');
+                    pickle.extend_from_slice(b"7\n");
+                }
+            } else if binary_memo {
+                pickle.push(b'h');
+                pickle.push(7);
+            } else {
+                pickle.push(b'g');
+                pickle.extend_from_slice(b"7\n");
+            }
+            pickle.push(0x87);
+            pickle.push(0x94);
+            pickle.push(b'a');
+            pickle.push(b's');
+        }
+        pickle.push(b'.');
+        let index_at = header_len + stored1.len() + stored2.len();
+        let mut out = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        out.extend_from_slice(stored1);
+        out.extend_from_slice(stored2);
+        out.extend_from_slice(&zlib_compress(&pickle));
+        out
+    }
+
+    #[test]
+    fn validation_memo_opcodes_share_prefix() {
+        for binary_memo in [true, false] {
+            let archive = build_30_memo(binary_memo);
+            let name = if binary_memo { "memo-bin" } else { "memo-text" };
+            let (root, out, result) = run_extract(name, &archive);
+            result.unwrap();
+            assert_eq!(fs::read(out.join("a.bin")).unwrap(), b"ABfirst-");
+            assert_eq!(fs::read(out.join("b.bin")).unwrap(), b"ABsecond");
+            fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn adversarial_memo_misuse_refused() {
+        // BINPUT on an empty stack.
+        let mut pickle = Vec::new();
+        pickle.extend_from_slice(b"\x80\x02q\x00.");
+        let index_at = 34usize;
+        let mut archive = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        archive.extend_from_slice(&zlib_compress(&pickle));
+        let (root, result) = run("memo-put-empty", &archive);
+        assert_eq!(result.unwrap_err().code, ErrorCode::UnsupportedTarget);
+        fs::remove_dir_all(&root).ok();
+        // BINGET against an empty memo.
+        let mut pickle = Vec::new();
+        pickle.extend_from_slice(b"\x80\x02h\x63.");
+        let mut archive = format!("RPA-3.0 {index_at:016x} {KEY:08x}\n").into_bytes();
+        archive.extend_from_slice(&zlib_compress(&pickle));
+        let (root, result) = run("memo-get-miss", &archive);
+        assert_eq!(result.unwrap_err().code, ErrorCode::UnsupportedTarget);
         fs::remove_dir_all(&root).ok();
     }
 }
