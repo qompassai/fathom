@@ -13,6 +13,7 @@ pub mod audio;
 pub mod beam;
 pub mod blend;
 pub mod cubism;
+pub mod dialogue;
 pub mod engine;
 pub mod game;
 pub mod gamemaker;
@@ -331,6 +332,21 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(cubism::census_cubism_model),
+    );
+    registry.register(
+        descriptor(
+            "census_dialogue_tree",
+            ToolClass::Observe,
+            "dialogue",
+            "Census the dialogue/story layer of a game tree as data: \
+             Ren'Py .rpy sources (labels, menus, choice options, say \
+             lines, jump/call story graph), compiled .rpyc at strings \
+             level (structure named as a gap), Tyrano .ks scenarios \
+             (labels, tags, jump graph), Naninovel .nani and Yarn/Ink \
+             containers at census level",
+            target_schema(),
+        ),
+        Arc::new(dialogue::census_dialogue_tree),
     );
     registry.register(
         descriptor(
@@ -687,6 +703,24 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(rpgmaker::extract_rgss_archive),
+    );
+    registry.register(
+        descriptor(
+            "extract_rpgmaker_dialogue",
+            ToolClass::Observe,
+            "dialogue",
+            "Extract RPG Maker MV/MZ event dialogue from data/*.json \
+             (Show Text 101/401 messages with speaker — MZ name box or \
+             face name — and choice sets 102) into a dialogue.jsonl \
+             dump (map/event/page, speaker, text) in an output \
+             directory, with counts. The story graph is named, not \
+             reconstructed: transfer/branch logic is program, not data",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(dialogue::extract_rpgmaker_dialogue),
     );
     registry.register(
         descriptor(
