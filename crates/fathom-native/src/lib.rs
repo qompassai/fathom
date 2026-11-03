@@ -17,11 +17,13 @@ pub mod ghidra;
 pub mod godot;
 pub mod gpu;
 pub mod il2cpp;
+pub mod iostore;
 pub mod layout;
 pub mod python;
 pub mod renpy;
 pub mod rpgmaker;
 pub mod sections;
+pub mod uasset;
 pub mod unity;
 pub mod unreal;
 
@@ -649,6 +651,24 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_unreal_pak",
+            ToolClass::Observe,
+            "unreal",
+            "Extract a pak's verified payloads (versions 11 and 12) into an \
+             output directory under a target root, with a manifest: entries \
+             are written only after their stored bytes SHA-1-verify against \
+             the data-area header; Zlib entries are inflated; encrypted \
+             entries are never decrypted; other compression methods (for \
+             example Oodle) are recorded, never written",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(unreal::extract_unreal_pak),
+    );
+    registry.register(
+        descriptor(
             "find_anti_analysis_techniques",
             ToolClass::Read,
             "ghidra",
@@ -1069,6 +1089,19 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "inspect_iostore_container",
+            ToolClass::Read,
+            "unreal",
+            "Census one Unreal IoStore container header (.utoc): version, \
+             compression block size, directory index size, partition count, \
+             and the paired .ucas size. The chunk entry table, the directory \
+             index body, and chunk extraction are named gaps, never guessed",
+            target_schema(),
+        ),
+        Arc::new(iostore::inspect_iostore_container),
+    );
+    registry.register(
+        descriptor(
             "inspect_renpy_archive",
             ToolClass::Read,
             "renpy",
@@ -1103,6 +1136,20 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(unity::inspect_unity_bundle),
+    );
+    registry.register(
+        descriptor(
+            "inspect_uasset_package",
+            ToolClass::Read,
+            "unreal",
+            "Census one Unreal .uasset package summary: the name table, \
+             import map (class package, class, name), and export map \
+             (objects with resolved classes and serial sizes) under the \
+             two corpus-proven summary layouts. Property data is out of \
+             scope by design",
+            target_schema(),
+        ),
+        Arc::new(uasset::inspect_uasset_package),
     );
     registry.register(
         descriptor(
