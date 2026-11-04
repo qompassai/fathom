@@ -36,6 +36,7 @@ pub mod spec;
 pub mod uasset;
 pub mod ui;
 pub mod unity;
+pub mod unity_expand;
 pub mod unreal;
 
 pub use engine::locate_headless;
@@ -694,6 +695,25 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(unity::census_unity_monobehaviours),
+    );
+    registry.register(
+        descriptor(
+            "expand_unity_monobehaviours",
+            ToolClass::Observe,
+            "unity",
+            "Expand the MonoBehaviours of a Unity *_Data directory into \
+             named field values: each MonoScript class's serialized \
+             layout is reconstructed from the directory's Managed DLLs \
+             (ECMA-335 metadata), and every MonoBehaviour payload is \
+             decoded against its class layout. Decoding consumes \
+             exactly the payload byte count or the object is refused \
+             by named construct and counted — never a partial decode, \
+             never a silent drop. Per-object value digests, per-class \
+             reconstructed trees with skipped fields named, and \
+             refusals by construct are reported",
+            target_schema(),
+        ),
+        Arc::new(unity_expand::expand_unity_monobehaviours),
     );
     registry.register(
         descriptor(

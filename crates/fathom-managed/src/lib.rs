@@ -6,6 +6,7 @@
 
 pub mod metadata;
 pub mod native_aot;
+pub mod schema;
 
 use serde_json::{Value, json};
 use std::path::Path;

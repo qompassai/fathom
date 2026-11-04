@@ -612,6 +612,7 @@ version = "1.0.0"
 dependencies = [
  "base64 0.22.1",
  "fathom-core",
+ "fathom-managed",
  "flate2",
  "goblin",
  "lz4_flex",
