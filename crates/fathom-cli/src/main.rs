@@ -1,4 +1,6 @@
-//! fathom: Rust port of REA (SPEC.md).
+//! fathom: clean-room reverse-engineering MCP (SPEC.md) — Tiger
+//! Style, Ghidra/NSA RE discipline. REA (morluto) was a loose
+//! pragmatic reference only; this is not a port.
 //!
 //! Surfaces: `serve` (MCP over stdio, or HTTP with the A2A card
 //! when `--http` is given), `card`, `doctor`, and `tool` for
