@@ -15,6 +15,7 @@ use crate::config::Config;
 use crate::error::{ErrorCode, FathomError};
 use crate::evidence::sha256_hex;
 use crate::policy::{self, PolicyDecision, ToolClass};
+use crate::profile::ToolProfile;
 
 /// Whether a tool can run in this build right now.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -99,6 +100,26 @@ impl Registry {
             .collect()
     }
 
+    /// Scope the registry to a launch profile (D-910): drop
+    /// every tool whose provider the profile does not serve. The
+    /// full profile is a no-op, so a full launch's registry is
+    /// the unmodified build. Applied once, at composition, before
+    /// any surface sees the registry.
+    pub fn retain_profile(&mut self, profile: &ToolProfile) {
+        if profile.is_full() {
+            return;
+        }
+        let dropped: Vec<String> = self
+            .tools
+            .iter()
+            .filter(|(_, tool)| !profile.serves_provider(&tool.descriptor.provider))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in dropped {
+            self.tools.remove(&name);
+        }
+    }
+
     /// A digest of the catalog (identity for `session_info`).
     pub fn catalog_digest(&self) -> String {
         let serialized = serde_json::to_string(&self.descriptors()).unwrap_or_default();
@@ -157,6 +178,7 @@ pub fn session_info(config: &Config, registry: &Registry) -> Value {
         "tools_total": descriptors.len(),
         "tools_available": available,
         "tools": descriptors,
+        "tool_profile": config.tool_profile.spec_string(),
         "target_roots": config.target_roots.len(),
         "allow_tools": config.allow_tools,
         "state_dir": config.state_dir.display().to_string(),
@@ -310,5 +332,56 @@ mod tests {
             .map(|d| d.name.clone())
             .collect();
         assert_eq!(names, vec!["alpha_tool", "middle_tool", "zebra_tool"]);
+    }
+
+    fn registry_with_providers() -> Registry {
+        let mut registry = Registry::new();
+        for (name, provider) in [
+            ("session_info", "core"),
+            ("spec_record", "spec"),
+            ("analyze_function", "ghidra"),
+            ("build_video_guide", "video"),
+        ] {
+            let mut tool = descriptor(name, ToolClass::Read);
+            tool.provider = provider.to_string();
+            registry.register(tool, Arc::new(|_, _, _| Ok(json!({}))));
+        }
+        registry
+    }
+
+    #[test]
+    fn validation_retain_profile_keeps_core_and_spec_only() {
+        let mut registry = registry_with_providers();
+        registry.retain_profile(&ToolProfile::default());
+        let names: Vec<String> = registry
+            .descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert_eq!(names, vec!["session_info", "spec_record"]);
+    }
+
+    #[test]
+    fn validation_retain_profile_full_is_a_noop() {
+        let mut registry = registry_with_providers();
+        let before = registry.catalog_digest();
+        registry.retain_profile(&ToolProfile::full());
+        assert_eq!(registry.len(), 4);
+        assert_eq!(registry.catalog_digest(), before);
+    }
+
+    #[test]
+    fn validation_retain_profile_pack_keeps_its_lane() {
+        let mut registry = registry_with_providers();
+        registry.retain_profile(&ToolProfile::parse("media").unwrap());
+        let names: Vec<String> = registry
+            .descriptors()
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["build_video_guide", "session_info", "spec_record"]
+        );
     }
 }

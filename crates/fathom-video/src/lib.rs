@@ -334,6 +334,7 @@ mod tests {
                 signing_key_file: None,
                 state_dir: state_dir.clone(),
                 target_roots: vec![target_root],
+                tool_profile: fathom_core::profile::ToolProfile::default(),
                 video: VideoConfig::default(),
                 web: fathom_core::config::WebConfig::default(),
             };

@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use crate::error::{ErrorCode, FathomError};
+use crate::profile::ToolProfile;
 
 /// Default bind for the HTTP transports (loopback only).
 pub const DEFAULT_HTTP_BIND: &str = "127.0.0.1:8731";
@@ -36,6 +37,9 @@ pub struct ConfigFile {
     pub state_dir: Option<PathBuf>,
     /// Roots every target path must canonicalize under.
     pub target_roots: Option<Vec<PathBuf>>,
+    /// Tool profile spec (D-910): `core`, `full`, or a
+    /// comma-separated pack list. Absent means `core`.
+    pub tool_profile: Option<String>,
 }
 
 /// Operator-configured Blender backend program, the
@@ -207,6 +211,7 @@ pub struct Config {
     pub signing_key_file: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub target_roots: Vec<PathBuf>,
+    pub tool_profile: ToolProfile,
     pub video: VideoConfig,
     pub web: WebConfig,
 }
@@ -263,6 +268,10 @@ impl Config {
         }
         target_roots.sort();
         target_roots.dedup();
+        let tool_profile = match form.tool_profile {
+            Some(spec) => ToolProfile::parse(&spec)?,
+            None => ToolProfile::default(),
+        };
         let mut blender_program: Option<PathBuf> = None;
         let (video, web) = match form.providers {
             Some(providers) => {
@@ -288,6 +297,7 @@ impl Config {
             signing_key_file: form.signing_key_file,
             state_dir,
             target_roots,
+            tool_profile,
             video,
             web,
         })
@@ -329,6 +339,7 @@ impl Config {
             signing_key_file: None,
             state_dir: default_state_dir(),
             target_roots: Vec::new(),
+            tool_profile: ToolProfile::default(),
             video: VideoConfig::default(),
             web: WebConfig::default(),
         }
@@ -415,5 +426,20 @@ mod tests {
             Config::from_toml_str("allow_tools = [\"capture_process\", \"capture_process\"]\n")
                 .unwrap();
         assert_eq!(config.allow_tools, vec!["capture_process".to_string()]);
+    }
+
+    #[test]
+    fn validation_tool_profile_defaults_to_core_and_parses() {
+        let config = Config::from_toml_str("").unwrap();
+        assert_eq!(config.tool_profile.spec_string(), "core");
+        let config = Config::from_toml_str("tool_profile = \"games,media\"\n").unwrap();
+        assert_eq!(config.tool_profile.spec_string(), "core+games,media");
+        assert!(config.tool_profile.serves_provider("video"));
+    }
+
+    #[test]
+    fn adversarial_tool_profile_unknown_pack_fails_closed() {
+        let err = Config::from_toml_str("tool_profile = \"ghidraa\"\n").unwrap_err();
+        assert_eq!(err.code, ErrorCode::ConfigurationInvalid);
     }
 }

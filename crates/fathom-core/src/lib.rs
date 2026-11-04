@@ -15,6 +15,7 @@ pub mod limits;
 pub mod paths;
 pub mod policy;
 pub mod process;
+pub mod profile;
 pub mod proof;
 pub mod registry;
 
