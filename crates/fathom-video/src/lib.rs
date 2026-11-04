@@ -12,15 +12,24 @@
 //! verify as §6.3 claims. Y3/Y4 (research loop, clean room)
 //! are later stages of the same SPEC and are not stubbed
 //! here — unbuilt means absent, never faked.
+//!
+//! The media-capture lane (D-878) extends the same provider:
+//! `capture_danbooru_media` fetches one D-555/D-874-screened
+//! Danbooru post into a named quarantine, and
+//! `observe_captured_media` emits motion, character, object,
+//! and audio observation records over it. Captured media never
+//! leaves the quarantine; observation records are the only exit.
 #![forbid(unsafe_code)]
 
 mod asr;
 mod captions;
+mod capture;
 mod document;
 mod fetch;
 mod frames;
 mod guide;
 mod ingest;
+mod observe;
 mod read;
 mod url;
 
@@ -66,6 +75,30 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "capture_danbooru_media",
+            ToolClass::Observe,
+            "video",
+            "Capture one screen-cleared Danbooru post's media into the named quarantine (danbooru-re) and write its provenance record; the D-555/D-874 screen verdict is verified before any fetch, excluded or unscreened posts are refused typed, Danbooru requests are spaced >=2s and stop on HTTP 429",
+            json!({
+                "type": "object",
+                "properties": {
+                    "post_id": {"type": "integer", "minimum": 1,
+                        "description": "The Danbooru post id to capture"},
+                    "quarantine_dir": {"type": "string",
+                        "description": "Path of the quarantine directory (must be named danbooru-re and sit under a configured target root)"},
+                    "screen_path": {"type": "string",
+                        "description": "Path of the screen record (verdicts JSON) inside the quarantine, absolute or relative to it"},
+                    "screen_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$",
+                        "description": "Optional expected SHA-256 of the screen record; a mismatch refuses before any fetch"},
+                },
+                "required": ["post_id", "quarantine_dir", "screen_path"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(capture::capture_danbooru_media),
+    );
+    registry.register(
+        descriptor(
             "delete_video_ingest",
             ToolClass::Execute,
             "video",
@@ -98,6 +131,26 @@ pub fn register(registry: &mut Registry) {
             }),
         ),
         Arc::new(ingest::ingest_youtube_video),
+    );
+    registry.register(
+        descriptor(
+            "observe_captured_media",
+            ToolClass::Observe,
+            "video",
+            "Observe one captured Danbooru post inside its quarantine and write a media-observation/1 record: motion grammar, character/expression timeline, object candidates, and silent audio descriptors; the media hash is re-verified against the capture record first",
+            json!({
+                "type": "object",
+                "properties": {
+                    "capture_id": {"type": "string",
+                        "description": "The capture id returned by capture_danbooru_media"},
+                    "quarantine_dir": {"type": "string",
+                        "description": "Path of the quarantine directory holding the capture"},
+                },
+                "required": ["capture_id", "quarantine_dir"],
+                "additionalProperties": false,
+            }),
+        ),
+        Arc::new(observe::observe_captured_media),
     );
     registry.register(
         descriptor(
