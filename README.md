@@ -7,7 +7,7 @@
 
 Current release: **1.0.0** (2026-10-29). Deferred items are listed in [COMPLIANCE.md](COMPLIANCE.md); release history in [CHANGELOG.md](CHANGELOG.md).
 
-Rust port of REA (Reverse Engineer Anything): one
+Clean-room reverse-engineering MCP, written in Rust: one
 provider-neutral MCP server for reverse engineering — native
 binaries, JavaScript/Electron applications, .NET assemblies, web
 captures, EVM bytecode, and process behavior — where every result
@@ -22,9 +22,9 @@ fail-closed policy engine, and the staging plan. Design source:
 morluto/rea (MIT), credited in [NOTICE](NOTICE); no upstream code
 is used.
 
-## Why a Rust port
+## Why clean-room Rust
 
-Upstream REA is TypeScript/Node distributed through npm. This port
+Upstream REA is TypeScript/Node distributed through npm. Fathom
 exists to keep the capability on a Rust-first, pinned, auditable
 supply chain — the estate's standing direction (SPEC §1).
 

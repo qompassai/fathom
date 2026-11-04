@@ -19,7 +19,7 @@ configuration, and TLS material is auto-generated under
 `~/.local/state/openshell/tls/`.
 
 History: this directory was originated independently during the
-2026-10-10 Rust port scaffold, before the estate pattern was
+2026-10-10 clean-room Rust scaffold, before the estate pattern was
 located in full, and was reconciled to the pattern the same day
 after a cross-repo audit. The originated sketch used invented
 `[gateway]` and `[sandbox]` sections with `address`/`driver`/`mtls`

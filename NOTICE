@@ -1,4 +1,4 @@
-fathom — Rust port of REA (2026-10-10)
+fathom — clean-room reverse-engineering MCP (2026-10-10)
 ====================================================
 
 The code in this repository is original work of Qompass AI. It is a
@@ -13,9 +13,9 @@ model, one provider-neutral MCP catalog, admitted per-provider
 semantics) are credited here and in SPEC.md as the design source,
 per the MIT terms under which those documents are published.
 
-Where this port deviates from upstream's design (stateless per-call
+Where fathom deviates from upstream's design (stateless per-call
 tools instead of a bound binary session, a batch Ghidra export
 instead of a persistent bridge process), SPEC.md names the deviation
 and the reason.
 
-Licensing of this port: Apache-2.0. See LICENSE in this directory.
+Licensing of fathom: Apache-2.0. See LICENSE in this directory.

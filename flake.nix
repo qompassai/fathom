@@ -7,7 +7,7 @@
 # Original work of Qompass AI (2026-10-10).
 # #################################################################
 {
-  description = "fathom — Rust port of REA: evidence-first reverse-engineering MCP/A2A server";
+  description = "fathom — clean-room reverse-engineering MCP: evidence-first MCP/A2A server";
 
   inputs = {
     fenix = {

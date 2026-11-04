@@ -26,7 +26,7 @@ use fathom_core::registry::Registry;
 #[command(
     name = "fathom",
     version,
-    about = "Reverse engineer anything — evidence-first MCP/A2A server (Rust port)"
+    about = "Reverse engineer anything — evidence-first MCP/A2A server (clean-room Rust)"
 )]
 struct Cli {
     /// Config file (default: ./fathom.toml if present, else restrictive defaults)

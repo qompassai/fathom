@@ -19,7 +19,7 @@
       "type": "Author"
     }
   ],
-  "description": "Spec-led Rust port of REA — reverse-engineering tool provider for agents (MCP/A2A), with evidence-carrying findings and a fail-closed policy gate.",
+  "description": "Spec-led clean-room implementation — reverse-engineering tool provider for agents (MCP/A2A), with evidence-carrying findings and a fail-closed policy gate.",
   "language": "eng",
   "license": "Apache-2.0",
   "publication_date": "2026-10-17",

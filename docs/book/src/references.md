@@ -1,6 +1,6 @@
 # References
 
-External references collected for this port's research. The
+External references collected for fathom's research. The
 mashup-sources list below is Owner's link collection (from his
 "video game mashup sources" document, added 2026-10-10),
 preserved in document order: decompilation projects and

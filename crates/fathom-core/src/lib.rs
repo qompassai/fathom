@@ -1,4 +1,4 @@
-//! fathom-core: the shared foundation of the fathom port.
+//! fathom-core: the shared foundation of fathom.
 //!
 //! Config (fail-closed), canonical error contracts, the evidence
 //! model, the deterministic policy engine, the tool registry,
@@ -17,7 +17,7 @@ pub mod process;
 pub mod proof;
 pub mod registry;
 
-/// The port's version, from the workspace manifest.
+/// Fathom's version, from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The source revision this build was compiled from (SPEC
@@ -27,5 +27,5 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// the producer identity `session_info` reports.
 pub const SOURCE_REVISION: &str = env!("FATHOM_SOURCE_REVISION");
 
-/// The port's product name, used in protocol surfaces.
+/// Fathom's product name, used in protocol surfaces.
 pub const PRODUCT_NAME: &str = "fathom";

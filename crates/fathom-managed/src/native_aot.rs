@@ -1,5 +1,5 @@
 //! NativeAOT screening for PEs with no CLI header
-//! (REA-adaptation S8), implemented directly.
+//! (clean-room stage S8), implemented directly.
 //!
 //! A NativeAOT image is a native PE: no CLI header, no BSJB
 //! metadata root — `parse_pe` returns `None` for it exactly
