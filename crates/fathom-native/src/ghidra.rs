@@ -727,6 +727,7 @@ mod tests {
             signing_key_file: None,
             state_dir,
             target_roots: vec![root.canonicalize().unwrap()],
+            tool_profile: fathom_core::profile::ToolProfile::default(),
             video: fathom_core::config::VideoConfig::default(),
             web: fathom_core::config::WebConfig::default(),
         };

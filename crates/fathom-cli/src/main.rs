@@ -33,6 +33,13 @@ struct Cli {
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
+    /// Tool profile to serve (D-910): core (default), full, or a
+    /// comma-separated pack list (art, games, ghidra, js, managed,
+    /// media, observe, web). Overrides FATHOM_TOOL_PROFILE and the
+    /// config file's tool_profile.
+    #[arg(long, global = true)]
+    profile: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -75,8 +82,15 @@ fn main() -> ExitCode {
 }
 
 fn run(cli: Cli) -> Result<(), FathomError> {
-    let config = load_config(cli.config.as_deref())?;
-    let registry = composition::build_registry();
+    let mut config = load_config(cli.config.as_deref())?;
+    let profile_spec = cli
+        .profile
+        .clone()
+        .or_else(|| std::env::var(fathom_core::profile::PROFILE_ENV_VAR).ok());
+    if let Some(spec) = profile_spec {
+        config.tool_profile = fathom_core::profile::ToolProfile::parse(&spec)?;
+    }
+    let registry = composition::build_registry(&config.tool_profile);
     match cli.command {
         Command::Card { url } => {
             let card = build_card(&config, &registry, url.as_deref())?;
@@ -162,6 +176,7 @@ fn doctor(config: &Config, registry: &Registry) -> Value {
         "product": fathom_core::PRODUCT_NAME,
         "version": fathom_core::VERSION,
         "catalog_digest": registry.catalog_digest(),
+        "tool_profile": config.tool_profile.spec_string(),
         "config": {
             "allow_tools": config.allow_tools,
             "http_bind": config.http_bind.to_string(),

@@ -895,6 +895,7 @@ mod tests {
                 signing_key_file: None,
                 state_dir: self.state_dir.clone(),
                 target_roots: vec![self.root.canonicalize().unwrap()],
+                tool_profile: fathom_core::profile::ToolProfile::default(),
                 video: fathom_core::config::VideoConfig::default(),
                 web: fathom_core::config::WebConfig::default(),
             }
@@ -931,7 +932,7 @@ mod tests {
     }
 
     fn registry() -> Registry {
-        crate::composition::build_registry()
+        crate::composition::build_registry(&fathom_core::profile::ToolProfile::full())
     }
 
     fn overview_export() -> String {
@@ -1422,7 +1423,8 @@ mod tests {
 
         // A second registry whose catalog differs (one extra
         // tool) drifts the producer binding.
-        let mut drifted = crate::composition::build_registry();
+        let mut drifted =
+            crate::composition::build_registry(&fathom_core::profile::ToolProfile::full());
         drifted.register(
             descriptor(
                 "zz_extra_tool",

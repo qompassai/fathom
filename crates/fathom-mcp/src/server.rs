@@ -23,8 +23,9 @@
 //! field to success envelopes — the 2026-07-28 schema requires
 //! it; recorded in the migration gate report.)
 //!
-//! Tool advertisement: the complete catalog is always listed,
-//! including unavailable tools (SPEC §4). The baseline's
+//! Tool advertisement: the launched profile's catalog is
+//! listed, including its unavailable tools (SPEC §4; profiles
+//! are D-910 — the full profile lists the complete catalog). The baseline's
 //! estate-specific annotation fields (`class`, `provider`,
 //! `availability`) cannot ride rmcp's closed `ToolAnnotations`
 //! type, so they move — same names, same values — into the
