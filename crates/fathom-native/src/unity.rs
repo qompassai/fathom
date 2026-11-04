@@ -46,7 +46,7 @@ const BUNDLE_FORMAT_MAX: u32 = 8;
 const BUNDLE_FORMAT_MIN: u32 = 6;
 /// Unity class IDs whose payloads extraction writes
 /// (game-extract lane): MonoBehaviour, TextAsset, Texture2D.
-const CLASS_MONO_BEHAVIOUR: i64 = 114;
+pub(crate) const CLASS_MONO_BEHAVIOUR: i64 = 114;
 const CLASS_TEXT_ASSET: i64 = 49;
 const CLASS_TEXTURE_2D: i64 = 28;
 /// Header strings (signature, versions) live well inside
@@ -392,29 +392,29 @@ impl<'a> SfCursor<'a> {
 /// (game-extract lane): the byte ranges the census counts
 /// but does not surface, retained so extraction can slice
 /// payloads without re-walking the metadata.
-struct SfPayload {
-    byte_size: u32,
-    byte_start: u64,
-    class_id: i64,
-    path_id: i64,
-    script_type_index: i16,
-    type_index: i32,
+pub(crate) struct SfPayload {
+    pub(crate) byte_size: u32,
+    pub(crate) byte_start: u64,
+    pub(crate) class_id: i64,
+    pub(crate) path_id: i64,
+    pub(crate) script_type_index: i16,
+    pub(crate) type_index: i32,
 }
 
 /// The SerializedFile metadata census (SPEC §7.5).
-struct SfSummary {
-    data_offset: u64,
-    endianness: &'static str,
-    little: bool,
-    object_count: u32,
-    objects: Vec<Value>,
-    objects_by_class: Value,
-    objects_truncated: bool,
-    payloads: Vec<SfPayload>,
-    type_count: u32,
-    types: Vec<Value>,
-    unity_version: Option<String>,
-    version: u32,
+pub(crate) struct SfSummary {
+    pub(crate) data_offset: u64,
+    pub(crate) endianness: &'static str,
+    pub(crate) little: bool,
+    pub(crate) object_count: u32,
+    pub(crate) objects: Vec<Value>,
+    pub(crate) objects_by_class: Value,
+    pub(crate) objects_truncated: bool,
+    pub(crate) payloads: Vec<SfPayload>,
+    pub(crate) type_count: u32,
+    pub(crate) types: Vec<Value>,
+    pub(crate) unity_version: Option<String>,
+    pub(crate) version: u32,
 }
 
 fn sf_summary_json(summary: &SfSummary) -> Value {
@@ -488,7 +488,7 @@ fn parse_serialized_file(bytes: &[u8]) -> Result<SfSummary, FathomError> {
 /// either way (they are record bulk, not census data), and
 /// `objects_truncated` reports the payload bound, which is
 /// the one a census reads.
-fn parse_serialized_file_capped(
+pub(crate) fn parse_serialized_file_capped(
     bytes: &[u8],
     payload_cap: usize,
 ) -> Result<SfSummary, FathomError> {
@@ -1083,7 +1083,7 @@ pub fn inspect_unity_bundle(
 
 /// Unity class ID of MonoScript, the fixed-layout identity
 /// record a MonoBehaviour's `m_Script` pointer names.
-const CLASS_MONO_SCRIPT: i64 = 115;
+pub(crate) const CLASS_MONO_SCRIPT: i64 = 115;
 
 /// Per-object anomaly rows retained in the census record;
 /// the anomaly counts themselves stay exact past the cap.
@@ -1094,10 +1094,10 @@ const MB_ANOMALIES_RETAINED_MAX: usize = 100;
 /// Field order is the census's sort order (assembly,
 /// namespace, class), matching the record's grouping.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
-struct ScriptIdentity {
-    assembly: String,
-    namespace: String,
-    class: String,
+pub(crate) struct ScriptIdentity {
+    pub(crate) assembly: String,
+    pub(crate) namespace: String,
+    pub(crate) class: String,
 }
 
 /// Read one 4-aligned, length-prefixed string from a payload
@@ -1124,7 +1124,7 @@ fn read_payload_string(cursor: &mut SfCursor) -> Result<String, String> {
 /// m_PropertiesHash (16 bytes), m_ClassName, m_Namespace,
 /// m_AssemblyName. Trailing bytes (m_IsEditorScript) are
 /// not part of the identity and are not read.
-fn parse_mono_script(slice: &[u8], little: bool) -> Result<ScriptIdentity, String> {
+pub(crate) fn parse_mono_script(slice: &[u8], little: bool) -> Result<ScriptIdentity, String> {
     let mut cursor = SfCursor {
         bytes: slice,
         little,
@@ -1144,12 +1144,14 @@ fn parse_mono_script(slice: &[u8], little: bool) -> Result<ScriptIdentity, Strin
 }
 
 /// The fixed-layout head of one MonoBehaviour payload.
-/// m_Name is parsed (it validates the header's shape) but
-/// not retained: the census groups by script class.
-struct MbHeader {
-    payload_bytes: usize,
-    script_file: i32,
-    script_path: i64,
+/// m_Name is parsed (it validates the header's shape) and
+/// retained for the field-expansion lane; the census groups
+/// by script class and does not surface it.
+pub(crate) struct MbHeader {
+    pub(crate) name: String,
+    pub(crate) payload_bytes: usize,
+    pub(crate) script_file: i32,
+    pub(crate) script_path: i64,
 }
 
 /// Parse a MonoBehaviour header (fixed layout):
@@ -1158,7 +1160,7 @@ struct MbHeader {
 /// in bytes and never expanded — the per-script type trees
 /// that would describe it are not present in shipped builds
 /// (every type row in the corpus carries zero tree nodes).
-fn parse_mb_header(slice: &[u8], little: bool) -> Result<MbHeader, String> {
+pub(crate) fn parse_mb_header(slice: &[u8], little: bool) -> Result<MbHeader, String> {
     if slice.len() < 32 {
         return Err(format!(
             "payload is {} bytes, under the 32-byte header",
@@ -1180,8 +1182,9 @@ fn parse_mb_header(slice: &[u8], little: bool) -> Result<MbHeader, String> {
     let script_file = cursor.read_i32().map_err(|error| error.message)?;
     let script_path = cursor.read_i64().map_err(|error| error.message)?;
     cursor.position = 28;
-    let _name = read_payload_string(&mut cursor)?;
+    let name = read_payload_string(&mut cursor)?;
     Ok(MbHeader {
+        name,
         payload_bytes: slice.len() - cursor.position,
         script_file,
         script_path,
@@ -1190,7 +1193,7 @@ fn parse_mb_header(slice: &[u8], little: bool) -> Result<MbHeader, String> {
 
 /// The payload bytes of one object row, bounds-checked
 /// against the file's data area.
-fn payload_slice<'a>(
+pub(crate) fn payload_slice<'a>(
     bytes: &'a [u8],
     summary: &SfSummary,
     payload: &SfPayload,
@@ -1208,7 +1211,7 @@ fn payload_slice<'a>(
 /// same cursor discipline and fails closed on any byte-layout
 /// disagreement. Returns external file base names in table
 /// order (index + 1 is the PPtr file index).
-fn parse_sf_externals(bytes: &[u8]) -> Result<Vec<String>, FathomError> {
+pub(crate) fn parse_sf_externals(bytes: &[u8]) -> Result<Vec<String>, FathomError> {
     if bytes.len() < 20 {
         return Err(truncated("serialized file is shorter than its header"));
     }
@@ -1367,17 +1370,17 @@ fn is_serialized_name(name: &str) -> bool {
 
 /// One census source: a SerializedFile whose bytes live in a
 /// loose file or in one node of a UnityFS bundle.
-struct MbSource {
+pub(crate) struct MbSource {
     /// Registry key: the file base name scripts resolve by.
-    key: String,
+    pub(crate) key: String,
     /// Human-facing source name (relative path, or
     /// `bundle!node` for bundle members).
-    display: String,
-    container: &'static str,
-    load: MbSourceLoad,
+    pub(crate) display: String,
+    pub(crate) container: &'static str,
+    pub(crate) load: MbSourceLoad,
 }
 
-enum MbSourceLoad {
+pub(crate) enum MbSourceLoad {
     Loose(PathBuf),
     /// Bundle members are identified by the source's
     /// display name in the run's decoded-node cache.
@@ -1387,7 +1390,7 @@ enum MbSourceLoad {
 /// Walk a data directory (bounded) and collect candidate
 /// files: UnityFS bundles by signature, loose SerializedFiles
 /// by name. Returns (candidates, capped, unreadable).
-fn walk_mb_candidates(root: &Path) -> (Vec<PathBuf>, bool, usize) {
+pub(crate) fn walk_mb_candidates(root: &Path) -> (Vec<PathBuf>, bool, usize) {
     let mut candidates: Vec<PathBuf> = Vec::new();
     let mut capped = false;
     let mut unreadable = 0usize;
@@ -1446,7 +1449,7 @@ fn walk_mb_candidates(root: &Path) -> (Vec<PathBuf>, bool, usize) {
 /// (node path, bytes) pairs, mirroring the census path in
 /// `inspect_unity_bundle`: LZMA blocks info and undecodable
 /// blocks are named errors, never worked around.
-fn bundle_serialized_nodes(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+pub(crate) fn bundle_serialized_nodes(path: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
     let file_len = std::fs::metadata(path)
         .map_err(|error| format!("cannot stat bundle: {error}"))?
         .len();
