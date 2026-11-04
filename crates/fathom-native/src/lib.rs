@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aes;
 pub mod artifact;
 pub mod audio;
 pub mod beam;
@@ -22,11 +23,13 @@ pub mod godot;
 pub mod gpu;
 pub mod il2cpp;
 pub mod iostore;
+pub mod keyhunt;
 pub mod kirikiri;
 pub mod layout;
 pub mod mesh;
 pub mod python;
 pub mod renpy;
+pub mod resources;
 pub mod rpgmaker;
 pub mod sections;
 pub mod spec;
@@ -784,10 +787,15 @@ pub fn register(registry: &mut Registry) {
              output directory under a target root, with a manifest: entries \
              are written only after their stored bytes SHA-1-verify against \
              the data-area header; Zlib entries are inflated; encrypted \
-             entries are never decrypted; other compression methods (for \
-             example Oodle) are recorded, never written",
+             entries are written only when the optional encryption_key \
+             (hex or base64) decrypts them through the same SHA-1 gate; \
+             other compression methods (for example Oodle) are recorded, \
+             never written",
             target_and(
-                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                json!({
+                    "encryption_key": {"type": "string", "description": "Optional pak encryption key: 64 hexadecimal characters (0x prefix accepted) or base64 for 32 bytes"},
+                    "output_dir": {"type": "string", "description": "Output directory under a configured target root"},
+                }),
                 &["output_dir"],
             ),
         ),
@@ -1237,8 +1245,19 @@ pub fn register(registry: &mut Registry) {
             "godot",
             "Godot PCK archive inventory: header, directory entries with \
              content hashes and MD5 cross-checks; encrypted, sparse, and \
-             unreadable entries are explicit unknowns",
-            target_schema(),
+             unreadable entries are explicit unknowns. With the optional \
+             encryption_key (the 64-hex script encryption key), encrypted \
+             directories and entries are decrypted and verified; texture \
+             entries (.ctex/.stex) carry their PNG/WebP payload facts",
+            target_and(
+                json!({
+                    "encryption_key": {
+                        "type": "string",
+                        "description": "Optional Godot script encryption key: 64 hexadecimal characters (0x prefix accepted)",
+                    },
+                }),
+                &[],
+            ),
         ),
         Arc::new(godot::inspect_godot_pck),
     );
@@ -1255,6 +1274,22 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(gpu::inspect_gpu_code_object),
+    );
+    registry.register(
+        descriptor(
+            "inspect_pe_resources",
+            ToolClass::Read,
+            "pe",
+            "PE resource census: the .rsrc directory walked to its \
+             leaves — RT_DIALOG templates decoded (classic and \
+             DLGTEMPLATEEX), RT_GROUP_ICON reassembled into .ico \
+             form and hashed, RT_BITMAP reassembled into .bmp \
+             form, RT_MANIFEST inlined, RCDATA fingerprinted; \
+             header facts carry architecture, subsystem, DLL \
+             characteristics, sections, and .NET presence",
+            target_schema(),
+        ),
+        Arc::new(resources::inspect_pe_resources),
     );
     registry.register(
         descriptor(
@@ -1339,11 +1374,19 @@ pub fn register(registry: &mut Registry) {
             "inspect_unreal_pak",
             ToolClass::Read,
             "unreal",
-            "Unreal Engine pak (version 11) census: footer and index SHA-1 \
+            "Unreal Engine pak (versions 11 and 12) census: footer and index SHA-1 \
              verification, full-directory paths, encoded-entry decode cross-checked \
              against data-area headers, stored-byte SHA-1 verification for every \
-             entry; encrypted entries are reported, never decrypted",
-            target_schema(),
+             entry; with the optional encryption_key (hex or base64) an encrypted \
+             index and encrypted entries are decrypted and held to the same \
+             SHA-1 gates; without one, encrypted entries are reported, never \
+             decrypted",
+            target_and(
+                json!({
+                    "encryption_key": {"type": "string", "description": "Optional pak encryption key: 64 hexadecimal characters (0x prefix accepted) or base64 for 32 bytes"},
+                }),
+                &[],
+            ),
         ),
         Arc::new(unreal::inspect_unreal_pak),
     );
@@ -1840,6 +1883,26 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::write::rename_variable),
+    );
+    registry.register(
+        descriptor(
+            "scan_key_candidates",
+            ToolClass::Read,
+            "unreal",
+            "Hunt AES-256 key candidates in a binary: sliding-window entropy \
+             candidates with false-positive filters, ranked with AES S-box \
+             proximity; with pak_target, candidates are verified against the \
+             pak and only a candidate that actually decrypts it is reported \
+             VERIFIED. Rows carry SHA-256 fingerprints, never key bytes",
+            target_and(
+                json!({
+                    "limit": {"type": "integer", "minimum": 1, "description": "Maximum candidate rows returned (default 32); verified rows always return"},
+                    "pak_target": {"type": "string", "description": "Optional pak under a configured target root to verify candidates against"},
+                }),
+                &[],
+            ),
+        ),
+        Arc::new(keyhunt::scan_key_candidates),
     );
     registry.register(
         descriptor(

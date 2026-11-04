@@ -610,6 +610,7 @@ dependencies = [
 name = "fathom-native"
 version = "1.0.0"
 dependencies = [
+ "base64 0.22.1",
  "fathom-core",
  "flate2",
  "goblin",

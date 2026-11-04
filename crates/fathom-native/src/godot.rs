@@ -12,7 +12,15 @@
 //! v2+. Every read is bounds-checked; a malformed archive is a
 //! typed error, never a panic.
 //!
-//! Honesty contract: this reader never decrypts. An encrypted
+//! Honesty contract: decryption happens only with a
+//! caller-supplied script encryption key (the Godot export
+//! key, 64 hex characters). With a key, encrypted
+//! directories and entries are decrypted (AES-256 CFB,
+//! `FileAccessEncrypted` layout: plaintext MD5, plaintext
+//! length, IV, ciphertext) and the plaintext is verified
+//! against both MD5s before any fact is claimed from it; a
+//! wrong key is a typed integrity error, never a garbage
+//! inventory. Without a key this reader never decrypts. An encrypted
 //! directory ends the inventory at the header (the entry claims
 //! are ciphertext), and encrypted entries are listed with their
 //! directory facts but no content hash. Removal entries are
@@ -21,17 +29,23 @@
 //! readable entry's stored bytes are hashed (SHA-256) and
 //! cross-checked against the directory MD5, so an offset that
 //! lies in-bounds is caught rather than believed.
+//! The format-4 directory salt (directory-encrypted +
+//! sparse bundle) stays presence-only: its role in IV
+//! derivation is not established by any source this
+//! reader is built on, so that combination is reported,
+//! never decrypted (readers SPEC §3.2).
 
 use serde_json::{Value, json};
 use std::path::Path;
 
+use crate::aes;
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
 use fathom_core::evidence::{Confidence, Evidence, Finding, sha256_hex, subject_for_file};
 use fathom_core::limits::PCK_ENTRIES_MAX;
 use fathom_core::paths;
 use fathom_core::proof;
-use fathom_core::registry::{Registry, require_str};
+use fathom_core::registry::{Registry, optional_str, require_str};
 
 /// Entry flag: the entry's stored bytes are encrypted.
 const ENTRY_FLAG_ENCRYPTED: u32 = 1 << 0;
@@ -64,18 +78,25 @@ const FORMAT_VERSION_SUPPORTED_MAX: u32 = 4;
 
 #[derive(Debug)]
 pub struct PckArchive {
-    /// True when the pack flags declare an encrypted directory;
-    /// `entries` is then empty because the directory bytes are
-    /// ciphertext this reader does not decrypt.
+    /// True when an encrypted directory was decrypted with
+    /// the caller's key and its entries parsed from the
+    /// verified plaintext.
+    pub directory_decrypted: bool,
+    /// True when the pack flags declare an encrypted
+    /// directory. When no key is supplied (or the format-4
+    /// salt layout applies), `entries` is empty because the
+    /// directory bytes are ciphertext this reader does not
+    /// decrypt.
     pub directory_encrypted: bool,
     /// Directory position for format v3; absent in v1/v2, where
     /// the directory follows the header.
     pub directory_offset: Option<u64>,
     /// True when a format-4 header carried the 32-byte
     /// encrypted-directory salt (directory-encrypted + sparse
-    /// bundle). Presence only: the salt serves decryption,
-    /// which is NOT-IMPLEMENTED, so its bytes are never used
-    /// or emitted (readers SPEC §3.2).
+    /// bundle). Presence only: the salt's role in IV
+    /// derivation is not established, so its bytes are never
+    /// used or emitted, and that layout is never decrypted
+    /// (readers SPEC §3.2).
     pub directory_salt: bool,
     pub engine_major: u32,
     pub engine_minor: u32,
@@ -129,8 +150,97 @@ pub fn stored_offset(archive: &PckArchive, entry: &PckEntry) -> u64 {
     }
 }
 
+/// The `FileAccessEncrypted` stream header size:
+/// plaintext MD5 (16 bytes), plaintext length (8), IV
+/// (16). The blob a Godot writer stores for an encrypted
+/// directory or entry is this header followed by exactly
+/// `length` ciphertext bytes (AES-256 CFB, 128-bit
+/// segments).
+const FAE_HEADER_BYTES: usize = 40;
+
+/// Parse a Godot script encryption key: 64 hexadecimal
+/// characters (an optional `0x` prefix is accepted). The
+/// key text is never echoed into an error or a record.
+pub fn parse_script_key(text: &str) -> Result<[u8; 32], FathomError> {
+    let invalid = |message: &str| {
+        FathomError::new(ErrorCode::InvalidRequest, message.to_string())
+            .with_target("godot pck archive")
+    };
+    let hex = text.trim();
+    let hex = hex.strip_prefix("0x").unwrap_or(hex);
+    if hex.len() != 64 {
+        return Err(invalid(
+            "PCK encryption key must be 64 hexadecimal characters (32 bytes)",
+        ));
+    }
+    let mut key = [0_u8; 32];
+    for (index, pair) in hex.as_bytes().chunks(2).enumerate() {
+        let digits = std::str::from_utf8(pair)
+            .map_err(|_| invalid("PCK encryption key is not hexadecimal"))?;
+        key[index] = u8::from_str_radix(digits, 16)
+            .map_err(|_| invalid("PCK encryption key is not hexadecimal"))?;
+    }
+    Ok(key)
+}
+
+/// Decrypt one `FileAccessEncrypted` blob starting at
+/// `start` in `bytes`. The plaintext is returned only
+/// after its MD5 matches the header's declared MD5 — the
+/// same check the engine itself performs — so a wrong key
+/// fails here as an integrity error, never as content.
+/// `what` names the blob ("pack directory", "entry") in
+/// error text.
+fn decrypt_fae(
+    bytes: &[u8],
+    start: usize,
+    key: &[u8; 32],
+    what: &str,
+) -> Result<Vec<u8>, FathomError> {
+    let truncated = |message: String| {
+        FathomError::new(ErrorCode::Truncated, message).with_target("godot pck archive")
+    };
+    let header_end = start
+        .checked_add(FAE_HEADER_BYTES)
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| truncated(format!("encrypted {what} header overruns the archive")))?;
+    let mut expected_md5 = [0_u8; 16];
+    expected_md5.copy_from_slice(&bytes[start..start + 16]);
+    let length = u64::from_le_bytes(bytes[start + 16..start + 24].try_into().unwrap());
+    let mut iv = [0_u8; 16];
+    iv.copy_from_slice(&bytes[start + 24..start + 40]);
+    let length = usize::try_from(length).map_err(|_| {
+        truncated(format!(
+            "encrypted {what} length does not fit this platform"
+        ))
+    })?;
+    let end = header_end
+        .checked_add(length)
+        .filter(|end| *end <= bytes.len())
+        .ok_or_else(|| truncated(format!("encrypted {what} overruns the archive")))?;
+    let plaintext = aes::cfb128_decrypt(key, &iv, &bytes[header_end..end]);
+    if md5_digest(&plaintext) != expected_md5 {
+        return Err(FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!(
+                "decrypted {what} MD5 does not match its FileAccessEncrypted \
+                 header; the supplied key is wrong or the {what} is corrupt"
+            ),
+        )
+        .with_target("godot pck archive"));
+    }
+    Ok(plaintext)
+}
+
 /// Parse a Godot PCK archive from its full bytes.
 pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
+    parse_pck_with_key(bytes, None)
+}
+
+/// Parse a Godot PCK archive, decrypting an encrypted
+/// directory when `key` is supplied. The format-4 salt
+/// layout is never decrypted (module doc): its directory
+/// stays ciphertext and `entries` stays empty.
+pub fn parse_pck_with_key(bytes: &[u8], key: Option<&[u8; 32]>) -> Result<PckArchive, FathomError> {
     let unsupported = |message: String| {
         FathomError::new(ErrorCode::UnsupportedTarget, message).with_target("godot pck archive")
     };
@@ -193,6 +303,7 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
     let directory_encrypted = pack_flags & PACK_FLAG_DIRECTORY_ENCRYPTED != 0;
     let sparse_bundle = pack_flags & PACK_FLAG_SPARSE_BUNDLE != 0;
     let mut archive = PckArchive {
+        directory_decrypted: false,
         directory_encrypted,
         directory_offset,
         directory_salt,
@@ -206,11 +317,49 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
         sparse_bundle,
     };
     if directory_encrypted {
-        // The directory bytes are ciphertext. Report the header
-        // facts and stop: inventing entries would fake coverage.
+        // The directory bytes are ciphertext. Without a key,
+        // report the header facts and stop: inventing entries
+        // would fake coverage. The salt layout is reported,
+        // never decrypted (module doc).
+        let Some(key) = key.filter(|_| !directory_salt) else {
+            return Ok(archive);
+        };
+        let plaintext = decrypt_fae(bytes, directory_start, key, "pack directory")?;
+        let consumed = parse_directory(&plaintext, format_version, &mut archive)?;
+        if consumed != plaintext.len() {
+            return Err(FathomError::new(
+                ErrorCode::ArtifactIntegrityMismatch,
+                "decrypted pack directory carries trailing bytes after its last entry",
+            )
+            .with_target("godot pck archive"));
+        }
+        archive.directory_decrypted = true;
         return Ok(archive);
     }
-    let mut directory = Cursor::new(bytes, directory_start);
+    let Some(directory_bytes) = bytes.get(directory_start..) else {
+        return Err(
+            FathomError::new(ErrorCode::Truncated, "godot pck archive ends mid-structure")
+                .with_target("godot pck archive"),
+        );
+    };
+    parse_directory(directory_bytes, format_version, &mut archive)?;
+    Ok(archive)
+}
+
+/// Parse the directory region (a file count, then the
+/// entries) from the front of `directory_bytes` — the
+/// archive slice for a plain directory, the verified
+/// plaintext for a decrypted one. Returns the number of
+/// bytes the directory occupied.
+fn parse_directory(
+    directory_bytes: &[u8],
+    format_version: u32,
+    archive: &mut PckArchive,
+) -> Result<usize, FathomError> {
+    let unsupported = |message: String| {
+        FathomError::new(ErrorCode::UnsupportedTarget, message).with_target("godot pck archive")
+    };
+    let mut directory = Cursor::new(directory_bytes, 0);
     let file_count = directory.read_u32()?;
     for _ in 0..file_count {
         let path_len = usize::try_from(directory.read_u32()?).map_err(|_| {
@@ -243,13 +392,14 @@ pub fn parse_pck(bytes: &[u8]) -> Result<PckArchive, FathomError> {
             size,
         });
     }
-    Ok(archive)
+    Ok(directory.position)
 }
 
 /// Extract one entry's stored bytes (bounds-checked). This is
-/// the raw stored content: decryption is NOT-IMPLEMENTED, so an
-/// encrypted entry is a typed refusal, as are removal tombstones
-/// and sparse-bundle entries, whose bytes live elsewhere.
+/// the raw stored content: an encrypted entry is a typed
+/// refusal without a key (see [`extract_with_key`]), as are
+/// removal tombstones and sparse-bundle entries, whose bytes
+/// live elsewhere.
 pub fn extract<'a>(
     bytes: &'a [u8],
     archive: &PckArchive,
@@ -258,7 +408,7 @@ pub fn extract<'a>(
     if entry.encrypted() {
         return Err(FathomError::new(
             ErrorCode::CapabilityUnavailable,
-            "entry is encrypted; PCK decryption is not implemented",
+            "entry is encrypted; PCK decryption requires a script encryption key",
         ));
     }
     if entry.removal() {
@@ -280,6 +430,100 @@ pub fn extract<'a>(
         ));
     }
     stored_bytes(bytes, archive, entry)
+}
+
+/// Extract one entry's content as an owned buffer,
+/// decrypting when the entry is encrypted and a key is
+/// supplied. The decryption is returned only after every
+/// check in [`decrypt_entry`] passes; the other typed
+/// refusals match [`extract`].
+pub fn extract_with_key(
+    bytes: &[u8],
+    archive: &PckArchive,
+    entry: &PckEntry,
+    key: Option<&[u8; 32]>,
+) -> Result<Vec<u8>, FathomError> {
+    if entry.removal() {
+        return Err(FathomError::new(
+            ErrorCode::CapabilityUnavailable,
+            "entry is a removal marker; it carries no data in this pack",
+        ));
+    }
+    if entry.encrypted() {
+        let Some(key) = key else {
+            return Err(FathomError::new(
+                ErrorCode::CapabilityUnavailable,
+                "entry is encrypted; PCK decryption requires a script encryption key",
+            ));
+        };
+        if archive.sparse_bundle {
+            return Err(FathomError::new(
+                ErrorCode::CapabilityUnavailable,
+                "pack is a sparse bundle; entry bytes are not stored in this pack",
+            ));
+        }
+        return decrypt_entry(bytes, archive, entry, key);
+    }
+    if archive.format_version >= 4 && entry.delta() {
+        return Err(FathomError::new(
+            ErrorCode::CapabilityUnavailable,
+            "entry is a format-4 delta (patch) entry; applying it is content reconstruction, not extraction",
+        ));
+    }
+    if archive.sparse_bundle {
+        return Err(FathomError::new(
+            ErrorCode::CapabilityUnavailable,
+            "pack is a sparse bundle; entry bytes are not stored in this pack",
+        ));
+    }
+    Ok(stored_bytes(bytes, archive, entry)?.to_vec())
+}
+
+/// Decrypt one encrypted entry and verify the plaintext
+/// three ways before returning it: the
+/// `FileAccessEncrypted` header MD5 (inside
+/// [`decrypt_fae`]), the directory MD5 for this entry,
+/// and the directory size, which must declare either the
+/// plaintext length or the full stored blob length
+/// (header + plaintext) — the two conventions writers
+/// use. Any disagreement is an integrity error naming
+/// the entry.
+fn decrypt_entry(
+    bytes: &[u8],
+    archive: &PckArchive,
+    entry: &PckEntry,
+    key: &[u8; 32],
+) -> Result<Vec<u8>, FathomError> {
+    let start = usize::try_from(stored_offset(archive, entry))
+        .ok()
+        .filter(|start| *start <= bytes.len())
+        .ok_or_else(|| {
+            FathomError::new(ErrorCode::Truncated, "entry offset overruns the archive")
+        })?;
+    let plaintext = decrypt_fae(bytes, start, key, "entry")?;
+    if md5_digest(&plaintext) != entry.md5 {
+        return Err(FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!(
+                "decrypted entry {} MD5 does not match the directory MD5",
+                entry.path
+            ),
+        )
+        .with_target("godot pck archive"));
+    }
+    let plain_len = plaintext.len() as u64;
+    if entry.size != plain_len && entry.size != plain_len + FAE_HEADER_BYTES as u64 {
+        return Err(FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!(
+                "directory declares {} bytes for {} but its encrypted blob \
+                 carries a {plain_len}-byte plaintext",
+                entry.size, entry.path
+            ),
+        )
+        .with_target("godot pck archive"));
+    }
+    Ok(plaintext)
 }
 
 /// The entry's stored byte range, bounds-checked, with no
@@ -306,12 +550,201 @@ fn stored_bytes<'a>(
     Ok(&bytes[start..end])
 }
 
+/// The PNG file signature.
+const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+/// One unwrapped Godot texture payload: the image file a
+/// texture container embeds when its data format is a
+/// plain image encoding.
+#[derive(Debug)]
+pub struct TexturePayload<'a> {
+    /// The payload's image encoding: "png" or "webp". For
+    /// `.ctex` this is the header's declared data format,
+    /// verified against the payload signature; for `.stex`
+    /// (which declares none) it is read from the signature.
+    pub data_format: &'static str,
+    pub height: u32,
+    /// The embedded image file bytes, exactly as stored.
+    pub payload: &'a [u8],
+    pub width: u32,
+}
+
+/// Unwrap a Godot texture container — `.ctex` ("GST2",
+/// Godot 4) or `.stex` ("GDST", Godot 3) — to the image
+/// file it embeds. Only plain PNG / WebP payloads unwrap;
+/// anything else is a typed refusal.
+///
+/// The `.ctex` layout is measured from the estate corpus
+/// (5,117 files in one Godot 4.7 title): magic, version
+/// (1), width, height, texture flags, a reserved span, the
+/// data-format word at byte 36 (0 = raw image data,
+/// 1 = PNG, 2 = WebP, 3 = Basis Universal), basis fields,
+/// a mipmap word, then one length-prefixed payload at
+/// byte 52 spanning the rest of the entry. Raw-pixel and
+/// Basis payloads refuse, as does a payload whose
+/// signature or RIFF size contradicts the declared
+/// format. The `.stex` payload follows the 20-byte GDST
+/// header and runs to the end of the entry, per published
+/// analyses of real Godot 3 files; it is accepted only
+/// when it carries a PNG or WebP signature.
+pub fn unwrap_texture(bytes: &[u8]) -> Result<TexturePayload<'_>, FathomError> {
+    let refusal = |message: String| {
+        FathomError::new(ErrorCode::CapabilityUnavailable, message).with_target("godot texture")
+    };
+    let mismatch = |message: String| {
+        FathomError::new(ErrorCode::ArtifactIntegrityMismatch, message).with_target("godot texture")
+    };
+    let truncated = |message: &str| {
+        FathomError::new(ErrorCode::Truncated, message.to_string()).with_target("godot texture")
+    };
+    let word = |at: usize| -> u32 { u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap()) };
+    if bytes.len() >= 4 && &bytes[..4] == b"GST2" {
+        if bytes.len() < 56 {
+            return Err(truncated("ctex header is truncated"));
+        }
+        let version = word(4);
+        if version != 1 {
+            return Err(FathomError::new(
+                ErrorCode::UnsupportedTarget,
+                format!("ctex version {version} is not implemented (supported: 1)"),
+            )
+            .with_target("godot texture"));
+        }
+        let (width, height) = (word(8), word(12));
+        let data_format = match word(36) {
+            0 => {
+                return Err(refusal(
+                    "ctex data format 0 stores raw image data; there is no \
+                     embedded image file to unwrap"
+                        .to_string(),
+                ));
+            }
+            1 => "png",
+            2 => "webp",
+            3 => {
+                return Err(refusal(
+                    "ctex data format 3 stores a Basis Universal payload; \
+                     transcoding is not implemented"
+                        .to_string(),
+                ));
+            }
+            other => {
+                return Err(refusal(format!(
+                    "ctex data format {other} is not recognised"
+                )));
+            }
+        };
+        let payload_len = word(52) as usize;
+        if 56_usize.checked_add(payload_len) != Some(bytes.len()) {
+            return Err(mismatch(format!(
+                "ctex payload length {payload_len} does not span the entry \
+                 ({} bytes follow the header)",
+                bytes.len() - 56
+            )));
+        }
+        let payload = &bytes[56..];
+        check_image_payload(payload, data_format)?;
+        return Ok(TexturePayload {
+            data_format,
+            height,
+            payload,
+            width,
+        });
+    }
+    if bytes.len() >= 4 && &bytes[..4] == b"GDST" {
+        if bytes.len() < 20 {
+            return Err(truncated("stex header is truncated"));
+        }
+        let (width, height) = (word(4), word(8));
+        let payload = &bytes[20..];
+        let data_format = if payload.starts_with(&PNG_SIGNATURE) {
+            "png"
+        } else if is_webp_payload(payload) {
+            "webp"
+        } else {
+            return Err(refusal(
+                "stex payload is neither PNG nor WebP; only plain image \
+                 payloads unwrap"
+                    .to_string(),
+            ));
+        };
+        check_image_payload(payload, data_format)?;
+        return Ok(TexturePayload {
+            data_format,
+            height,
+            payload,
+            width,
+        });
+    }
+    Err(FathomError::new(
+        ErrorCode::UnsupportedTarget,
+        "not a Godot texture container (GST2/GDST magic missing)",
+    )
+    .with_target("godot texture"))
+}
+
+/// True when `payload` carries the RIFF/WEBP signature
+/// with a self-consistent RIFF size.
+fn is_webp_payload(payload: &[u8]) -> bool {
+    payload.len() >= 12
+        && &payload[..4] == b"RIFF"
+        && &payload[8..12] == b"WEBP"
+        && u32::from_le_bytes(payload[4..8].try_into().unwrap()) as usize == payload.len() - 8
+}
+
+/// Verify a payload against the image encoding claimed
+/// for it: PNG signature, or RIFF/WEBP with a consistent
+/// RIFF size. A contradiction is an integrity mismatch —
+/// the container's declaration is lying.
+fn check_image_payload(payload: &[u8], data_format: &str) -> Result<(), FathomError> {
+    let ok = match data_format {
+        "png" => payload.starts_with(&PNG_SIGNATURE),
+        _ => is_webp_payload(payload),
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err(FathomError::new(
+            ErrorCode::ArtifactIntegrityMismatch,
+            format!("texture declares {data_format} but the payload does not carry its signature"),
+        )
+        .with_target("godot texture"))
+    }
+}
+
+/// The census fact for one entry's texture unwrap, when
+/// the entry path names a texture container: the payload
+/// facts on success, the refusal on failure.
+fn texture_fact(path: &str, data: &[u8]) -> Option<Value> {
+    let is_texture = [".ctex", ".stex"].iter().any(|extension| {
+        path.len() >= extension.len()
+            && path[path.len() - extension.len()..].eq_ignore_ascii_case(extension)
+    });
+    if !is_texture {
+        return None;
+    }
+    Some(match unwrap_texture(data) {
+        Ok(texture) => json!({
+            "data_format": texture.data_format,
+            "height": texture.height,
+            "payload_bytes": texture.payload.len(),
+            "payload_sha256": sha256_hex(texture.payload),
+            "width": texture.width,
+        }),
+        Err(error) => json!({"unwrap_error": error.message}),
+    })
+}
+
 pub fn inspect_godot_pck(
     _: &Registry,
     config: &Config,
     args: &Value,
 ) -> Result<Value, FathomError> {
     let path = paths::validate_target(config, Path::new(require_str(args, "target")?))?;
+    let key = match optional_str(args, "encryption_key") {
+        Some(text) => Some(parse_script_key(text)?),
+        None => None,
+    };
     let subject = subject_for_file(&path)?;
     let bytes = std::fs::read(&path).map_err(|e| {
         FathomError::new(
@@ -319,12 +752,12 @@ pub fn inspect_godot_pck(
             format!("cannot read target: {e}"),
         )
     })?;
-    let archive = parse_pck(&bytes)?;
+    let archive = parse_pck_with_key(&bytes, key.as_ref())?;
     let subject_sha256 = subject.sha256.clone();
     let mut evidence = Evidence::new("inspect_godot_pck", "godot");
     evidence.subject = Some(subject);
-    if archive.directory_encrypted {
-        let record = pack_record(&archive, 0, 0, 0, 0, 0, 0);
+    if archive.directory_encrypted && !archive.directory_decrypted {
+        let record = pack_record(&archive, &PackCounts::default());
         let document = json!({
             "godot_pck": record.clone(),
             "godot_pck_entries": [],
@@ -338,14 +771,23 @@ pub fn inspect_godot_pck(
         }
         evidence.add_unknown(
             "directory",
-            "pack directory is encrypted (pack flag 0x1); the entry inventory \
-             was not established — PCK decryption is NOT-IMPLEMENTED",
+            if archive.directory_salt {
+                "pack directory is encrypted (pack flag 0x1) in the format-4 \
+                 sparse-salt layout; that layout's decryption is \
+                 NOT-IMPLEMENTED — the entry inventory was not established"
+            } else {
+                "pack directory is encrypted (pack flag 0x1); the entry \
+                 inventory was not established — no PCK encryption key was \
+                 supplied"
+            },
         );
         evidence.coverage.exhaustive = false;
         return Ok(evidence.to_value());
     }
     let total = archive.entries.len();
     let mut examined: u64 = 0;
+    let mut decrypted_count: u64 = 0;
+    let mut decryption_failed_count: u64 = 0;
     let mut delta_count: u64 = 0;
     let mut encrypted_count: u64 = 0;
     let mut mismatch_paths: Vec<&str> = Vec::new();
@@ -354,8 +796,17 @@ pub fn inspect_godot_pck(
     let mut verified_count: u64 = 0;
     let mut rows: Vec<Value> = Vec::new();
     for entry in &archive.entries {
-        let (row, outcome) = entry_row(&bytes, &archive, entry);
+        let (row, outcome) = entry_row(&bytes, &archive, entry, key.as_ref());
         match outcome {
+            EntryOutcome::Decrypted => {
+                decrypted_count += 1;
+                verified_count += 1;
+                examined += 1;
+            }
+            EntryOutcome::DecryptionFailed => {
+                decryption_failed_count += 1;
+                examined += 1;
+            }
             EntryOutcome::Delta => {
                 delta_count += 1;
                 examined += 1;
@@ -384,12 +835,16 @@ pub fn inspect_godot_pck(
     }
     let record = pack_record(
         &archive,
-        delta_count,
-        encrypted_count,
-        mismatch_paths.len() as u64,
-        overrun_paths.len() as u64,
-        removal_count,
-        verified_count,
+        &PackCounts {
+            decrypted_entries: decrypted_count,
+            decryption_failed_entries: decryption_failed_count,
+            delta_entries: delta_count,
+            encrypted_entries: encrypted_count,
+            md5_mismatch_entries: mismatch_paths.len() as u64,
+            removal_entries: removal_count,
+            unreadable_entries: overrun_paths.len() as u64,
+            verified_entries: verified_count,
+        },
     );
     // Retention (readers SPEC §2.5): the census document is
     // the envelope's rows plus their locator keys, keyed to
@@ -447,7 +902,18 @@ pub fn inspect_godot_pck(
             "entry contents",
             format!(
                 "{encrypted_count} of {total} entries are encrypted; their stored \
-                 bytes are ciphertext — not hashed, not verified"
+                 bytes are ciphertext — not hashed, not verified — no PCK \
+                 encryption key was supplied"
+            ),
+        );
+    }
+    if decryption_failed_count > 0 {
+        evidence.add_unknown(
+            "entry decryption",
+            format!(
+                "{decryption_failed_count} of {total} entries failed decryption \
+                 or its integrity checks under the supplied key; their rows \
+                 carry directory facts only"
             ),
         );
     }
@@ -504,6 +970,8 @@ fn retain_census(
 
 /// How one entry's stored bytes checked out.
 enum EntryOutcome {
+    Decrypted,
+    DecryptionFailed,
     Delta,
     Encrypted,
     Mismatch,
@@ -516,7 +984,12 @@ enum EntryOutcome {
 /// One entry's evidence row plus its verification outcome. The
 /// row always carries the directory facts; content facts appear
 /// only when the stored bytes were actually read.
-fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, EntryOutcome) {
+fn entry_row(
+    bytes: &[u8],
+    archive: &PckArchive,
+    entry: &PckEntry,
+    key: Option<&[u8; 32]>,
+) -> (Value, EntryOutcome) {
     let delta = archive.format_version >= 4 && entry.delta();
     let mut row = json!({
         "delta": delta,
@@ -532,8 +1005,28 @@ fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, En
         "status": "unread",
     });
     let outcome = if entry.encrypted() {
-        row["status"] = json!("encrypted");
-        EntryOutcome::Encrypted
+        match key {
+            None => {
+                row["status"] = json!("encrypted");
+                EntryOutcome::Encrypted
+            }
+            Some(key) => match decrypt_entry(bytes, archive, entry, key) {
+                Ok(plaintext) => {
+                    row["decrypted"] = json!(true);
+                    row["sha256"] = json!(sha256_hex(&plaintext));
+                    row["md5_verified"] = json!(true);
+                    row["status"] = json!("verified");
+                    if let Some(texture) = texture_fact(&entry.path, &plaintext) {
+                        row["texture"] = texture;
+                    }
+                    EntryOutcome::Decrypted
+                }
+                Err(_) => {
+                    row["status"] = json!("decryption_failed");
+                    EntryOutcome::DecryptionFailed
+                }
+            },
+        }
     } else if entry.removal() {
         row["status"] = json!("removal");
         EntryOutcome::Removal
@@ -560,6 +1053,9 @@ fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, En
         match extract(bytes, archive, entry) {
             Ok(data) => {
                 row["sha256"] = json!(sha256_hex(data));
+                if let Some(texture) = texture_fact(&entry.path, data) {
+                    row["texture"] = texture;
+                }
                 let verified = md5_digest(data) == entry.md5;
                 row["md5_verified"] = json!(verified);
                 if verified {
@@ -584,15 +1080,20 @@ fn entry_row(bytes: &[u8], archive: &PckArchive, entry: &PckEntry) -> (Value, En
 /// record is what the retained census document carries
 /// (readers SPEC §2.5); the envelope finding adds the export
 /// digest to it.
-fn pack_record(
-    archive: &PckArchive,
+/// The per-outcome entry counts a pack record reports.
+#[derive(Default)]
+struct PackCounts {
+    decrypted_entries: u64,
+    decryption_failed_entries: u64,
     delta_entries: u64,
     encrypted_entries: u64,
     md5_mismatch_entries: u64,
-    unreadable_entries: u64,
     removal_entries: u64,
+    unreadable_entries: u64,
     verified_entries: u64,
-) -> Value {
+}
+
+fn pack_record(archive: &PckArchive, counts: &PackCounts) -> Value {
     let total_file_bytes: u64 = archive
         .entries
         .iter()
@@ -601,24 +1102,27 @@ fn pack_record(
         .sum();
     json!({
         "declared_entries": archive.entries.len(),
-        "delta_entries": delta_entries,
+        "decrypted_entries": counts.decrypted_entries,
+        "decryption_failed_entries": counts.decryption_failed_entries,
+        "delta_entries": counts.delta_entries,
+        "directory_decrypted": archive.directory_decrypted,
         "directory_encrypted": archive.directory_encrypted,
         "directory_offset": archive.directory_offset,
         "directory_salt": archive.directory_salt,
-        "encrypted_entries": encrypted_entries,
+        "encrypted_entries": counts.encrypted_entries,
         "engine_major": archive.engine_major,
         "engine_minor": archive.engine_minor,
         "engine_patch": archive.engine_patch,
         "file_base": archive.file_base,
         "format_version": archive.format_version,
-        "md5_mismatch_entries": md5_mismatch_entries,
+        "md5_mismatch_entries": counts.md5_mismatch_entries,
         "pack_flags": archive.pack_flags,
         "relative_base": archive.pack_flags & PACK_FLAG_RELATIVE_BASE != 0,
-        "removal_entries": removal_entries,
+        "removal_entries": counts.removal_entries,
         "sparse_bundle": archive.sparse_bundle,
         "total_file_bytes": total_file_bytes,
-        "unreadable_entries": unreadable_entries,
-        "verified_entries": verified_entries,
+        "unreadable_entries": counts.unreadable_entries,
+        "verified_entries": counts.verified_entries,
     })
 }
 
@@ -814,6 +1318,24 @@ mod tests {
         pack_flags: u32,
         files: &[(&str, &[u8], u32)],
     ) -> (Vec<u8>, Vec<usize>) {
+        build_pack_full(format_version, pack_flags, files, None, false, false)
+    }
+
+    /// The full writer: with a `key`, entries flagged
+    /// encrypted are stored as `FileAccessEncrypted` blobs
+    /// over their plaintext, and `encrypt_directory` stores
+    /// the whole directory as one such blob.
+    /// `declare_full_blob_sizes` picks the directory size
+    /// convention for encrypted entries: the stored blob
+    /// length (true) or the plaintext length (false).
+    fn build_pack_full(
+        format_version: u32,
+        pack_flags: u32,
+        files: &[(&str, &[u8], u32)],
+        key: Option<&[u8; 32]>,
+        encrypt_directory: bool,
+        declare_full_blob_sizes: bool,
+    ) -> (Vec<u8>, Vec<usize>) {
         // Format 4 with an encrypted + sparse directory
         // carries the 32-byte salt after the directory offset
         // field, before the 64 reserved bytes.
@@ -834,14 +1356,34 @@ mod tests {
             .iter()
             .map(|(path, _, _)| entry_len(path))
             .sum::<usize>();
+        let wrapped: Vec<Vec<u8>> = files
+            .iter()
+            .enumerate()
+            .map(|(index, (_, contents, flags))| match key {
+                Some(key)
+                    if flags & ENTRY_FLAG_ENCRYPTED != 0 && flags & ENTRY_FLAG_REMOVAL == 0 =>
+                {
+                    let mut iv = [0_u8; 16];
+                    iv[..8].copy_from_slice(&(index as u64 + 1).to_le_bytes());
+                    fae_wrap(key, &iv, contents)
+                }
+                _ => contents.to_vec(),
+            })
+            .collect();
+        let stored_directory_len = directory_len
+            + if encrypt_directory {
+                FAE_HEADER_BYTES
+            } else {
+                0
+            };
         let data_start = match format_version {
             3.. => header_len.div_ceil(32) * 32,
-            2 => (header_len + directory_len).div_ceil(32) * 32,
-            _ => header_len + directory_len,
+            2 => (header_len + stored_directory_len).div_ceil(32) * 32,
+            _ => header_len + stored_directory_len,
         };
         let mut positions: Vec<u64> = Vec::new();
         let mut cursor = data_start;
-        for (_, contents, flags) in files {
+        for (index, (_, _, flags)) in files.iter().enumerate() {
             if flags & ENTRY_FLAG_REMOVAL != 0 {
                 positions.push(0);
                 continue;
@@ -850,7 +1392,7 @@ mod tests {
                 cursor = cursor.div_ceil(32) * 32;
             }
             positions.push(cursor as u64);
-            cursor += contents.len();
+            cursor += wrapped[index].len();
         }
         let file_base = if format_version >= 2 {
             data_start as u64
@@ -863,7 +1405,7 @@ mod tests {
             header_len
         };
         let total_len = if format_version >= 3 {
-            directory_start + directory_len
+            directory_start + stored_directory_len
         } else {
             cursor
         };
@@ -885,18 +1427,17 @@ mod tests {
         if format_version >= 3 {
             write_u64(&mut out, 32, directory_start as u64);
         }
-        let mut at = directory_start;
-        write_u32(&mut out, at, files.len() as u32);
-        at += 4;
+        let mut dir: Vec<u8> = Vec::with_capacity(directory_len);
+        dir.extend_from_slice(&(files.len() as u32).to_le_bytes());
         let mut offset_positions = Vec::new();
         for (index, (path, contents, flags)) in files.iter().enumerate() {
             let removal = flags & ENTRY_FLAG_REMOVAL != 0;
             let padded = padded_len(path);
-            write_u32(&mut out, at, padded as u32);
-            at += 4;
-            out[at..at + path.len()].copy_from_slice(path.as_bytes());
-            at += padded;
-            offset_positions.push(at);
+            dir.extend_from_slice(&(padded as u32).to_le_bytes());
+            let mut path_field = path.as_bytes().to_vec();
+            path_field.resize(padded, 0);
+            dir.extend_from_slice(&path_field);
+            offset_positions.push(directory_start + dir.len());
             let stored = if removal {
                 0
             } else if format_version >= 2 {
@@ -904,34 +1445,63 @@ mod tests {
             } else {
                 positions[index]
             };
-            write_u64(&mut out, at, stored);
-            at += 8;
-            write_u64(
-                &mut out,
-                at,
-                if removal { 0 } else { contents.len() as u64 },
-            );
-            at += 8;
+            dir.extend_from_slice(&stored.to_le_bytes());
+            let declared = if removal {
+                0
+            } else if flags & ENTRY_FLAG_ENCRYPTED != 0 && declare_full_blob_sizes {
+                wrapped[index].len() as u64
+            } else {
+                contents.len() as u64
+            };
+            dir.extend_from_slice(&declared.to_le_bytes());
             let md5 = if removal {
                 [0_u8; 16]
             } else {
                 md5_digest(contents)
             };
-            out[at..at + 16].copy_from_slice(&md5);
-            at += 16;
+            dir.extend_from_slice(&md5);
             if format_version >= 2 {
-                write_u32(&mut out, at, *flags);
-                at += 4;
+                dir.extend_from_slice(&flags.to_le_bytes());
             }
         }
-        for (index, (_, contents, flags)) in files.iter().enumerate() {
+        assert_eq!(dir.len(), directory_len);
+        if encrypt_directory {
+            let blob = fae_wrap(
+                key.expect("directory encryption requires a key"),
+                &[0x5a; 16],
+                &dir,
+            );
+            out[directory_start..directory_start + blob.len()].copy_from_slice(&blob);
+        } else {
+            out[directory_start..directory_start + dir.len()].copy_from_slice(&dir);
+        }
+        for (index, (_, _, flags)) in files.iter().enumerate() {
             if flags & ENTRY_FLAG_REMOVAL != 0 {
                 continue;
             }
             let start = positions[index] as usize;
-            out[start..start + contents.len()].copy_from_slice(contents);
+            out[start..start + wrapped[index].len()].copy_from_slice(&wrapped[index]);
         }
         (out, offset_positions)
+    }
+
+    /// Wrap plaintext the way a Godot writer stores an
+    /// encrypted stream: MD5, length, IV, CFB ciphertext.
+    fn fae_wrap(key: &[u8; 32], iv: &[u8; 16], plaintext: &[u8]) -> Vec<u8> {
+        let mut blob = Vec::with_capacity(FAE_HEADER_BYTES + plaintext.len());
+        blob.extend_from_slice(&md5_digest(plaintext));
+        blob.extend_from_slice(&(plaintext.len() as u64).to_le_bytes());
+        blob.extend_from_slice(iv);
+        blob.extend_from_slice(&crate::aes::cfb128_encrypt(key, iv, plaintext));
+        blob
+    }
+
+    /// The fixed test key and its hex form, for fixtures
+    /// and `encryption_key` arguments.
+    const TEST_KEY: [u8; 32] = [7_u8; 32];
+
+    fn test_key_hex() -> String {
+        TEST_KEY.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
     fn write_u32(out: &mut [u8], at: usize, value: u32) {
@@ -943,6 +1513,10 @@ mod tests {
     }
 
     fn run_inspect(test_name: &str, bytes: &[u8]) -> (PathBuf, Value) {
+        run_inspect_with(test_name, bytes, None)
+    }
+
+    fn run_inspect_with(test_name: &str, bytes: &[u8], key_hex: Option<&str>) -> (PathBuf, Value) {
         let root = std::env::temp_dir().join(format!(
             "fathom-native-test-{}-{test_name}",
             std::process::id()
@@ -956,7 +1530,10 @@ mod tests {
             root,
         ))
         .unwrap();
-        let args = json!({"target": pack.display().to_string()});
+        let mut args = json!({"target": pack.display().to_string()});
+        if let Some(key_hex) = key_hex {
+            args["encryption_key"] = json!(key_hex);
+        }
         let value = inspect_godot_pck(&Registry::new(), &config, &args).unwrap();
         (root, value)
     }
@@ -1519,5 +2096,297 @@ mod tests {
             extract(&bytes, &archive, &archive.entries[1]).unwrap(),
             &[1, 2, 3, 4]
         );
+    }
+
+    // D-704 item 1': key handling, PCK decryption, texture
+    // unwrap. The corpus holds no encrypted pack, so these
+    // synthetic writer fixtures are the gate.
+
+    #[test]
+    fn decryption_key_parsing_forms() {
+        let hex = test_key_hex();
+        assert_eq!(parse_script_key(&hex).unwrap(), TEST_KEY);
+        assert_eq!(parse_script_key(&format!("0x{hex}")).unwrap(), TEST_KEY);
+        assert_eq!(parse_script_key(&hex.to_uppercase()).unwrap(), TEST_KEY);
+        for bad in ["0707", "", "zz".repeat(32).as_str()] {
+            let err = parse_script_key(bad).unwrap_err();
+            assert_eq!(err.code, ErrorCode::InvalidRequest, "{bad}");
+        }
+        let err = parse_script_key(&"07".repeat(33)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::InvalidRequest);
+    }
+
+    #[test]
+    fn decryption_entry_roundtrip_both_size_conventions() {
+        for declare_full_blob in [false, true] {
+            let (bytes, _) = build_pack_full(
+                2,
+                0,
+                &[
+                    ("res://plain.txt", b"plain", 0),
+                    ("res://secret.txt", b"secret-data", ENTRY_FLAG_ENCRYPTED),
+                ],
+                Some(&TEST_KEY),
+                false,
+                declare_full_blob,
+            );
+            let archive = parse_pck_with_key(&bytes, Some(&TEST_KEY)).unwrap();
+            assert_eq!(archive.entries.len(), 2);
+            assert_eq!(
+                extract_with_key(&bytes, &archive, &archive.entries[1], Some(&TEST_KEY)).unwrap(),
+                b"secret-data"
+            );
+            // Without the key the stored bytes stay refused,
+            // and the keyless extract refuses too.
+            let err = extract(&bytes, &archive, &archive.entries[1]).unwrap_err();
+            assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
+            let err = extract_with_key(&bytes, &archive, &archive.entries[1], None).unwrap_err();
+            assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
+            let (root, value) = run_inspect_with("dec-entry", &bytes, Some(&test_key_hex()));
+            assert_eq!(value["status"], "complete");
+            let rows = entry_rows(&value);
+            assert_eq!(rows[1]["status"], "verified");
+            assert_eq!(rows[1]["decrypted"], true);
+            assert_eq!(rows[1]["md5_verified"], true);
+            let facts = pack_facts(&value);
+            assert_eq!(facts["decrypted_entries"], 1);
+            assert_eq!(facts["decryption_failed_entries"], 0);
+            assert_eq!(facts["verified_entries"], 2);
+            fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn decryption_directory_roundtrip_v2_and_v3() {
+        for format in [2, 3] {
+            let (bytes, _) = build_pack_full(
+                format,
+                PACK_FLAG_DIRECTORY_ENCRYPTED,
+                &[("res://a.txt", b"alpha", 0), ("res://b.txt", b"beta", 0)],
+                Some(&TEST_KEY),
+                true,
+                false,
+            );
+            let keyless = parse_pck(&bytes).unwrap();
+            assert!(keyless.directory_encrypted);
+            assert!(!keyless.directory_decrypted);
+            assert!(keyless.entries.is_empty());
+            let archive = parse_pck_with_key(&bytes, Some(&TEST_KEY)).unwrap();
+            assert!(archive.directory_decrypted);
+            assert_eq!(archive.entries.len(), 2);
+            assert_eq!(
+                extract(&bytes, &archive, &archive.entries[0]).unwrap(),
+                b"alpha"
+            );
+            let (root, value) = run_inspect_with("dec-dir", &bytes, Some(&test_key_hex()));
+            assert_eq!(value["status"], "complete");
+            assert_eq!(pack_facts(&value)["directory_decrypted"], true);
+            fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn decryption_wrong_key_directory_is_a_typed_error() {
+        let (bytes, _) = build_pack_full(
+            2,
+            PACK_FLAG_DIRECTORY_ENCRYPTED,
+            &[("res://a.txt", b"alpha", 0)],
+            Some(&TEST_KEY),
+            true,
+            false,
+        );
+        let wrong = [9_u8; 32];
+        let err = parse_pck_with_key(&bytes, Some(&wrong)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ArtifactIntegrityMismatch);
+    }
+
+    #[test]
+    fn decryption_wrong_key_entry_is_a_failed_row_not_garbage() {
+        let (bytes, _) = build_pack_full(
+            2,
+            0,
+            &[("res://secret.txt", b"secret-data", ENTRY_FLAG_ENCRYPTED)],
+            Some(&TEST_KEY),
+            false,
+            false,
+        );
+        let wrong_hex: String = [9_u8; 32]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let (root, value) = run_inspect_with("dec-wrong", &bytes, Some(&wrong_hex));
+        assert_eq!(value["status"], "partial");
+        let rows = entry_rows(&value);
+        assert_eq!(rows[0]["status"], "decryption_failed");
+        assert_eq!(rows[0]["sha256"], Value::Null);
+        let facts = pack_facts(&value);
+        assert_eq!(facts["decryption_failed_entries"], 1);
+        assert_eq!(facts["decrypted_entries"], 0);
+        assert!(
+            value["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|unknown| unknown["aspect"] == "entry decryption")
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_truncated_encrypted_blob_is_typed() {
+        let (bytes, _) = build_pack_full(
+            2,
+            0,
+            &[("res://secret.txt", b"secret-data", ENTRY_FLAG_ENCRYPTED)],
+            Some(&TEST_KEY),
+            false,
+            false,
+        );
+        let archive = parse_pck(&bytes).unwrap();
+        let start = stored_offset(&archive, &archive.entries[0]) as usize;
+        let truncated = &bytes[..start + 20];
+        let archive = parse_pck(truncated).unwrap();
+        let err = extract_with_key(truncated, &archive, &archive.entries[0], Some(&TEST_KEY))
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::Truncated);
+    }
+
+    #[test]
+    fn adversarial_encrypted_entry_size_lie_is_rejected() {
+        let (mut bytes, offset_positions) = build_pack_full(
+            2,
+            0,
+            &[("res://secret.txt", b"secret-data", ENTRY_FLAG_ENCRYPTED)],
+            Some(&TEST_KEY),
+            false,
+            false,
+        );
+        // The size field follows the offset field; declare a
+        // length the blob does not carry (plaintext 11 + 7).
+        write_u64(&mut bytes, offset_positions[0] + 8, 18);
+        let archive = parse_pck(&bytes).unwrap();
+        let err =
+            extract_with_key(&bytes, &archive, &archive.entries[0], Some(&TEST_KEY)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ArtifactIntegrityMismatch);
+    }
+
+    #[test]
+    fn adversarial_keyed_traversal_entry_stays_inert() {
+        let (bytes, _) = build_pack_full(
+            2,
+            0,
+            &[("../../evil.txt", b"payload", ENTRY_FLAG_ENCRYPTED)],
+            Some(&TEST_KEY),
+            false,
+            false,
+        );
+        let (root, value) = run_inspect_with("dec-traversal", &bytes, Some(&test_key_hex()));
+        assert_eq!(value["status"], "complete");
+        assert_eq!(entry_rows(&value)[0]["path"], "../../evil.txt");
+        assert!(!root.join("evil.txt").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn png_payload() -> Vec<u8> {
+        let mut payload = PNG_SIGNATURE.to_vec();
+        payload.extend_from_slice(b"rest-of-the-file");
+        payload
+    }
+
+    fn webp_payload() -> Vec<u8> {
+        let mut payload = b"RIFF".to_vec();
+        payload.extend_from_slice(&4_u32.to_le_bytes());
+        payload.extend_from_slice(b"WEBP");
+        payload
+    }
+
+    /// A `.ctex` in the shape the corpus measures: 56-byte
+    /// header, payload length at 52, payload to the end.
+    fn make_ctex(data_format: u32, payload: &[u8], width: u32, height: u32) -> Vec<u8> {
+        let mut out = vec![0_u8; 56];
+        out[0..4].copy_from_slice(b"GST2");
+        write_u32(&mut out, 4, 1);
+        write_u32(&mut out, 8, width);
+        write_u32(&mut out, 12, height);
+        write_u32(&mut out, 16, 0x0d00_0000);
+        write_u32(&mut out, 20, 0xffff_ffff);
+        write_u32(&mut out, 36, data_format);
+        out[40..42].copy_from_slice(&(width as u16).to_le_bytes());
+        out[42..44].copy_from_slice(&(height as u16).to_le_bytes());
+        write_u32(&mut out, 48, 5);
+        write_u32(&mut out, 52, payload.len() as u32);
+        out.extend_from_slice(payload);
+        out
+    }
+
+    #[test]
+    fn texture_ctex_png_and_webp_unwrap() {
+        let png = png_payload();
+        let ctex = make_ctex(1, &png, 64, 32);
+        let texture = unwrap_texture(&ctex).unwrap();
+        assert_eq!(texture.data_format, "png");
+        assert_eq!(texture.payload, png.as_slice());
+        assert_eq!((texture.width, texture.height), (64, 32));
+        let webp = webp_payload();
+        let ctex = make_ctex(2, &webp, 2560, 1440);
+        let texture = unwrap_texture(&ctex).unwrap();
+        assert_eq!(texture.data_format, "webp");
+        assert_eq!(texture.payload, webp.as_slice());
+        // Through the census: the row carries the unwrap fact.
+        let ctex = make_ctex(2, &webp, 2560, 1440);
+        let (bytes, _) = build_pack(4, 0, &[("res://tex.ctex", &ctex, 0)]);
+        let (root, value) = run_inspect("ctex-row", &bytes);
+        let rows = entry_rows(&value);
+        assert_eq!(rows[0]["texture"]["data_format"], "webp");
+        assert_eq!(rows[0]["texture"]["width"], 2560);
+        assert_eq!(
+            rows[0]["texture"]["payload_sha256"],
+            json!(sha256_hex(&webp))
+        );
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn texture_ctex_refusals_are_typed() {
+        let png = png_payload();
+        let err = unwrap_texture(&make_ctex(0, &png, 8, 8)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
+        let err = unwrap_texture(&make_ctex(3, &png, 8, 8)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
+        // Declared PNG, actual WebP: the declaration lies.
+        let err = unwrap_texture(&make_ctex(1, &webp_payload(), 8, 8)).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ArtifactIntegrityMismatch);
+        // Length lie: payload does not span the entry.
+        let mut lying = make_ctex(1, &png, 8, 8);
+        lying.push(0);
+        let err = unwrap_texture(&lying).unwrap_err();
+        assert_eq!(err.code, ErrorCode::ArtifactIntegrityMismatch);
+        // Unknown container version.
+        let mut v2 = make_ctex(1, &png, 8, 8);
+        write_u32(&mut v2, 4, 2);
+        let err = unwrap_texture(&v2).unwrap_err();
+        assert_eq!(err.code, ErrorCode::UnsupportedTarget);
+        // Not a texture at all.
+        let err = unwrap_texture(b"plain bytes").unwrap_err();
+        assert_eq!(err.code, ErrorCode::UnsupportedTarget);
+    }
+
+    #[test]
+    fn texture_stex_unwraps_png_and_refuses_other_payloads() {
+        let png = png_payload();
+        let mut stex = vec![0_u8; 20];
+        stex[0..4].copy_from_slice(b"GDST");
+        write_u32(&mut stex, 4, 64);
+        write_u32(&mut stex, 8, 32);
+        stex.extend_from_slice(&png);
+        let texture = unwrap_texture(&stex).unwrap();
+        assert_eq!(texture.data_format, "png");
+        assert_eq!(texture.payload, png.as_slice());
+        assert_eq!((texture.width, texture.height), (64, 32));
+        let mut garbage = vec![0_u8; 20];
+        garbage[0..4].copy_from_slice(b"GDST");
+        garbage.extend_from_slice(b"not an image");
+        let err = unwrap_texture(&garbage).unwrap_err();
+        assert_eq!(err.code, ErrorCode::CapabilityUnavailable);
     }
 }
