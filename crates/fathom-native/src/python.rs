@@ -1,5 +1,5 @@
 //! Python bytecode (.pyc) and PyInstaller archive reader
-//! (REA-adaptation S5), implemented directly.
+//! (clean-room stage S5), implemented directly.
 //!
 //! The .pyc side parses the header (PEP 552: magic, bit-field
 //! flags, then a timestamp/source-size pair or a source hash)

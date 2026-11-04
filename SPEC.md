@@ -3,13 +3,15 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Copyright (c) 2026 Qompass AI -->
 
-Rust port of REA (Reverse Engineer Anything). This document
+Clean-room reverse-engineering MCP — Tiger Style, Ghidra/NSA RE
+discipline. REA (morluto) was a loose pragmatic reference only;
+this is not a port. This document
 is the contract the implementation is built and gated against: the
 capability inventory, the per-capability Rust strategy, the evidence
 and error models, the policy and confinement rules, the MCP and A2A
 surfaces, and the honest staging plan.
 
-## 1. Why this port exists
+## 1. Why this implementation exists
 
 Commissioned by Matt, 2026-10-10, in his words and reasoning:
 
@@ -19,11 +21,11 @@ Commissioned by Matt, 2026-10-10, in his words and reasoning:
   and a registry whose compromise modes are well documented. Matt's
   stack (diver, phlow, rose, volta, vongola) is Rust-first precisely
   so that surface is small, pinned, and auditable.
-- The estate's pattern is therefore to prioritize **whole Rust ports
+- The estate's pattern is therefore to prioritize **whole clean-room Rust implementations
   proactively** — while the design is understood and the work is
-  calm — instead of reactionary ports later, under pressure, when an
+  calm — instead of reactionary rewrites later, under pressure, when an
   upstream incident or a breaking change forces the issue.
-- Building the port is also the training ground: it teaches Rust in
+- Building fathom is also the training ground: it teaches Rust in
   the domain where Matt most needs fluency (his own security
   tooling), on a codebase whose behavior is fully specified in
   advance by upstream's public contracts.

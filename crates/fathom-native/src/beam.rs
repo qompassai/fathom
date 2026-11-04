@@ -1,4 +1,4 @@
-//! BEAM module reader (REA-adaptation S6), implemented
+//! BEAM module reader (clean-room stage S6), implemented
 //! directly.
 //!
 //! A .beam file is an IFF form: `FOR1`, a big-endian form

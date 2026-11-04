@@ -1,4 +1,4 @@
-//! fathom-a2a: the A2A surface of the port.
+//! fathom-a2a: the A2A surface of fathom.
 //!
 //! A signed agent card, following the volta/vongola estate
 //! pattern: the card is canonicalized with JCS (RFC 8785) and

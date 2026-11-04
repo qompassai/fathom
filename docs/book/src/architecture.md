@@ -23,7 +23,7 @@ the registry applies policy before any handler runs.
 <details>
 <summary>Stateless per call</summary>
 
-Upstream REA keeps a prepared-target session. The port is
+Upstream REA keeps a prepared-target session. Fathom is
 stateless: every call names its target, and policy is checked on
 every call. The Ghidra project cache (keyed by the subject's
 SHA-256) recovers the session's performance without its implicit

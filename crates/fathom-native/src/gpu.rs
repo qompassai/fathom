@@ -1,4 +1,4 @@
-//! GPU code-object reader (REA-adaptation S7), implemented
+//! GPU code-object reader (clean-room stage S7), implemented
 //! directly over goblin's ELF reader.
 //!
 //! Three subject shapes, one tool:

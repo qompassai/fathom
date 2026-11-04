@@ -1,7 +1,9 @@
 # Overview
 
-`fathom` is a Rust port of REA (Reverse Engineer
-Anything). It gives agents and operators reverse-engineering tools
+`fathom` is a clean-room reverse-engineering MCP written in Rust —
+Tiger Style, Ghidra/NSA RE discipline. REA (Reverse Engineer
+Anything) was a loose pragmatic reference only; fathom is not a
+port of it. It gives agents and operators reverse-engineering tools
 over MCP (stdio and streamable HTTP) and advertises them with a
 signed A2A agent card.
 
@@ -12,15 +14,15 @@ from the fork's public documentation. The full contract lives in
 the repository's `SPEC.md`; this book is the operator's tour.
 
 <details>
-<summary>Why a Rust port</summary>
+<summary>Why clean-room Rust</summary>
 
 Owner's reasoning, recorded 2026-10-10: given the shifting
 security-vulnerability landscape (Node/npm supply-chain risk) and
-his Rust-first stack, whole Rust ports of tools he depends on are
-prioritized proactively rather than as reactionary ports later —
+his Rust-first stack, whole clean-room Rust implementations of tools he depends on are
+prioritized proactively rather than as reactionary rewrites later —
 and building them is how he learns Rust for when it really
 matters. Upstream REA stays available in parallel as a pinned,
-policy-gated MCP server; this port is the long-term home.
+policy-gated MCP server; fathom is the long-term home.
 
 </details>
 
