@@ -17,15 +17,17 @@
 //! vocabulary (voice/vo/dialogue, bgm/music/ost,
 //! se/sfx/sound) and is labelled as path-derived.
 //!
-//! Corpus reality for the containerised formats the
-//! rung names — CRI ACB/AWB, FSB, Wwise .bnk/.wem, HCA:
-//! none exist anywhere in the moved corpus or in any
-//! extracted output this programme produced. They are
-//! recorded as a named gap in the programme report
-//! rather than parsed speculatively without ground
-//! truth. Unity AudioClip payloads inside Serialized
-//! Files are likewise out of this reader (payload
-//! extraction is the Unity rung's scope).
+//! Containerised formats are the audio-RE lane's
+//! scope (D-989, `audio_re.rs`), built once corpus
+//! ground truth existed: FSB5 banks (standalone or as
+//! Unity `.resource` files) and CRI ACB/AWB/HCA are
+//! parsed there against verified specimens. Wwise
+//! .bnk/.wem remains a named gap — the corpus holds
+//! no Wwise specimen, so it is still not parsed
+//! speculatively without ground truth. Unity AudioClip
+//! payloads inside Serialized Files are likewise out
+//! of this reader (payload extraction is the Unity
+//! rung's scope).
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -54,20 +56,20 @@ fn mismatch(message: String) -> FathomError {
 /// Header facts for one audio file; every field the
 /// format does not honestly give stays None.
 #[derive(Default)]
-struct AudioFacts {
+pub(crate) struct AudioFacts {
     /// Duration in seconds (see `duration_basis`).
-    duration_seconds: Option<f64>,
+    pub(crate) duration_seconds: Option<f64>,
     /// How the duration was derived: "header",
     /// "xing_frames", "granule_position", or
     /// "cbr_estimate".
-    duration_basis: Option<&'static str>,
+    pub(crate) duration_basis: Option<&'static str>,
     /// Channels where the header states them.
-    channels: Option<u32>,
+    pub(crate) channels: Option<u32>,
     /// Codec label ("vorbis", "opus", "mp3", "pcm",
     /// "flac", "mp4a", ...).
-    codec: Option<String>,
+    pub(crate) codec: Option<String>,
     /// Sample rate in Hz where the header states it.
-    sample_rate: Option<u32>,
+    pub(crate) sample_rate: Option<u32>,
 }
 
 fn u16_at(bytes: &[u8], at: usize) -> Option<u16> {
@@ -121,7 +123,7 @@ fn read_tail(file: &mut File, file_len: u64, count: u64) -> Result<Vec<u8>> {
 }
 
 /// WAV facts from the RIFF chunk walk.
-fn wav_facts(head: &[u8], file_len: u64) -> AudioFacts {
+pub(crate) fn wav_facts(head: &[u8], file_len: u64) -> AudioFacts {
     let mut facts = AudioFacts::default();
     let mut pos = 12usize;
     let mut byte_rate: Option<u32> = None;
@@ -182,7 +184,7 @@ fn last_granule(tail: &[u8]) -> Option<u64> {
 
 /// Ogg facts (Vorbis / Opus) from the first page plus
 /// the tail granule for duration.
-fn ogg_facts(head: &[u8], tail: &[u8]) -> AudioFacts {
+pub(crate) fn ogg_facts(head: &[u8], tail: &[u8]) -> AudioFacts {
     let mut facts = AudioFacts::default();
     let Some(segments) = head.get(26).copied() else {
         return facts;
@@ -224,7 +226,7 @@ fn ogg_facts(head: &[u8], tail: &[u8]) -> AudioFacts {
 
 /// MPEG audio frame facts: first header + Xing count
 /// when present, else a labelled bitrate estimate.
-fn mp3_facts(head: &[u8], file_len: u64) -> AudioFacts {
+pub(crate) fn mp3_facts(head: &[u8], file_len: u64) -> AudioFacts {
     let mut facts = AudioFacts::default();
     let mut at = 0usize;
     // Skip an ID3v2 tag (syncsafe size).
@@ -354,7 +356,7 @@ fn mp3_bitrate_kbps(version: u8, layer: u8, index: u8) -> Option<u32> {
 
 /// M4A facts: mvhd timescale/duration for duration;
 /// stsd first entry for codec + channels.
-fn m4a_facts(head: &[u8]) -> AudioFacts {
+pub(crate) fn m4a_facts(head: &[u8]) -> AudioFacts {
     let mut facts = AudioFacts::default();
     // mvhd: after "mvhd" + version byte: v0 carries
     // timescale at +12 and duration at +16 (from the
@@ -396,7 +398,7 @@ fn m4a_facts(head: &[u8]) -> AudioFacts {
 
 /// FLAC facts from STREAMINFO (34 bytes at offset 42
 /// in the canonical layout; searched, not assumed).
-fn flac_facts(head: &[u8]) -> AudioFacts {
+pub(crate) fn flac_facts(head: &[u8]) -> AudioFacts {
     let mut facts = AudioFacts {
         codec: Some("flac".to_string()),
         ..AudioFacts::default()

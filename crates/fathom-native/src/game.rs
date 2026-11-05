@@ -149,8 +149,8 @@ fn asset_class(ext: &str) -> &'static str {
     match ext {
         "7z" | "apk" | "asar" | "pak" | "pck" | "rar" | "rgss3a" | "rpa" | "ucas" | "utoc"
         | "xp3" | "zip" => "archive",
-        "aac" | "acb" | "aif" | "aiff" | "awb" | "bnk" | "flac" | "fsb" | "m4a" | "mp3" | "ogg"
-        | "opus" | "rpgmvo" | "wav" | "wem" => "audio",
+        "aac" | "acb" | "adx" | "aif" | "aiff" | "awb" | "bank" | "bnk" | "flac" | "fsb"
+        | "hca" | "m4a" | "mp3" | "ogg" | "opus" | "rpgmvo" | "wav" | "wem" => "audio",
         "csv" | "ini" | "json" | "ks" | "locres" | "nani" | "rvdata" | "rvdata2" | "rxdata"
         | "txt" | "uasset" | "ubulk" | "uexp" | "umap" | "xml" | "yaml" | "yml" => "data",
         "appimage" | "bpl" | "dll" | "dylib" | "exe" | "so" => "executable",
@@ -514,7 +514,9 @@ fn hex_bytes(bytes: &[u8]) -> String {
 /// one exists.
 fn container_tool(kind: &str) -> Option<&'static str> {
     match kind {
+        "acb" => Some("census_cri_acb"),
         "data_win" => Some("inspect_gamemaker_datawin"),
+        "fsb5" => Some("census_fsb5_container"),
         "pak" => Some("inspect_unreal_pak"),
         "pck" => Some("inspect_godot_pck"),
         "rgss3a" => Some("inspect_rgss_archive"),
@@ -785,6 +787,8 @@ fn primary_binary_facts(root: &Path, files: &[WalkedFile], root_name: &str) -> O
 fn container_kind(file: &WalkedFile) -> Option<&'static str> {
     match file.ext.as_str() {
         "7z" => Some("7z"),
+        "acb" => Some("acb"),
+        "bank" | "fsb" => Some("fsb5"),
         "apk" => Some("apk"),
         "asar" => Some("asar"),
         "pak" => Some("pak"),

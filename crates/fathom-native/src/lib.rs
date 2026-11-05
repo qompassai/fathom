@@ -11,6 +11,7 @@
 pub mod aes;
 pub mod artifact;
 pub mod audio;
+pub mod audio_re;
 pub mod beam;
 pub mod blend;
 pub mod cubism;
@@ -167,6 +168,21 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(ghidra::program::analysis_status),
+    );
+    registry.register(
+        descriptor(
+            "analyze_audio_file",
+            ToolClass::Read,
+            "audio",
+            "Analyse one audio file: header facts (WAV, Ogg Vorbis/Opus, MP3, \
+             M4A, FLAC) plus, for WAV PCM, measured peak/RMS/crest/DC offset, \
+             a silence map, zero-crossing rate, and a spectral summary from a \
+             native FFT — all labelled derived with the method stated. \
+             Container magics (FSB5, ACB, HCA) are identified and pointed \
+             at their census tools. Nothing is played",
+            target_schema(),
+        ),
+        Arc::new(audio_re::analyze_audio_file),
     );
     registry.register(
         descriptor(
@@ -352,6 +368,33 @@ pub fn register(registry: &mut Registry) {
             target_schema(),
         ),
         Arc::new(dialogue::census_dialogue_tree),
+    );
+    registry.register(
+        descriptor(
+            "census_cri_acb",
+            ToolClass::Read,
+            "cri",
+            "Census one CRI Atom ACB cue sheet: the @UTF tables (cue names \
+             and per-waveform CRI metadata — channels, loop flag, sample \
+             rate, sample count) and the embedded AFS2 wave archive's \
+             entries with their stream kinds. Nothing is decoded or played",
+            target_schema(),
+        ),
+        Arc::new(audio_re::census_cri_acb),
+    );
+    registry.register(
+        descriptor(
+            "census_fsb5_container",
+            ToolClass::Read,
+            "fmod",
+            "Census one FMOD FSB5 container (a standalone bank or a Unity \
+             .resource holding several banks concatenated): per bank and \
+             subsound — codec, channels, sample rate, sample count, \
+             duration, data offset/size, name-table name, and loop points \
+             when the header carries them. Nothing is decoded or played",
+            target_schema(),
+        ),
+        Arc::new(audio_re::census_fsb5_container),
     );
     registry.register(
         descriptor(
@@ -697,6 +740,40 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_cri_acb",
+            ToolClass::Observe,
+            "cri",
+            "Extract the embedded AFS2 wave archive's streams from a CRI \
+             Atom ACB into an output directory under a target root, \
+             verbatim (.hca/.adx/.bin by magic), with a manifest carrying \
+             the cue-name and waveform tables. Streams are not decoded",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(audio_re::extract_cri_acb),
+    );
+    registry.register(
+        descriptor(
+            "extract_fsb5_audio",
+            ToolClass::Observe,
+            "fmod",
+            "Extract every subsound stream of an FMOD FSB5 container (one \
+             or more concatenated banks) into an output directory under a \
+             target root, with a manifest: PCM streams are rewrapped as \
+             WAV, other codecs are written raw (FSB Vorbis is not a \
+             standalone Ogg), and when vgmstream-cli is allowlisted and \
+             installed each raw stream is also offered to it for decode",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(audio_re::extract_fsb5_audio),
+    );
+    registry.register(
+        descriptor(
             "extract_gamemaker_audio",
             ToolClass::Observe,
             "gamemaker",
@@ -760,6 +837,23 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(dialogue::extract_rpgmaker_dialogue),
+    );
+    registry.register(
+        descriptor(
+            "extract_rpgmaker_mv_audio",
+            ToolClass::Observe,
+            "rpgmaker",
+            "Decrypt and extract a RPG Maker MV/MZ game's encrypted audio \
+             (.rpgmvo/.rpgmvm) from its www tree into an output directory \
+             under a target root, using the encryptionKey in \
+             data/System.json (the key itself is never recorded), with a \
+             manifest whose rows verify the decrypted container magic",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(audio_re::extract_rpgmaker_mv_audio),
     );
     registry.register(
         descriptor(
