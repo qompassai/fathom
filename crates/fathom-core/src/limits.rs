@@ -138,6 +138,61 @@ pub const AUDIO_FILES_MAX: usize = 100_000;
 /// need the most room).
 pub const AUDIO_HEAD_BYTES_MAX: u64 = 1_048_576;
 
+/// Largest single file `analyze_audio_file` will
+/// read whole for measurement (audio-RE lane, D-989).
+pub const AUDIO_ANALYZE_BYTES_MAX: u64 = 268_435_456;
+
+/// Windowed segments in one `analyze_audio_file`
+/// spectral summary.
+pub const AUDIO_ANALYZE_SEGMENTS_MAX: usize = 8;
+
+/// Silence runs one `analyze_audio_file` call reports.
+pub const AUDIO_SILENCE_RUNS_MAX: usize = 1_024;
+
+/// Largest ACB cue sheet the CRI readers will load
+/// whole (ACBs are cue metadata plus, for memory
+/// banks, the wave archive; corpus specimens are
+/// under 8 MiB).
+pub const CRI_ACB_BYTES_MAX: u64 = 536_870_912;
+
+/// Entries in one AFS2 wave archive.
+pub const CRI_AFS2_ENTRIES_MAX: usize = 100_000;
+
+/// Columns in one @UTF table (the vgmstream cap).
+pub const CRI_UTF_COLUMNS_MAX: usize = 256;
+
+/// Rows in one @UTF table (the vgmstream cap).
+pub const CRI_UTF_ROWS_MAX: usize = 128_000;
+
+/// Schema bytes in one @UTF table (the vgmstream cap).
+pub const CRI_UTF_SCHEMA_BYTES_MAX: usize = 32_768;
+
+/// String-section bytes in one @UTF table (the
+/// vgmstream cap).
+pub const CRI_UTF_STRINGS_BYTES_MAX: usize = 524_288;
+
+/// Banks in one FSB5 container file (a Unity
+/// `.resource` concatenates banks; the corpus maximum
+/// observed is in the dozens).
+pub const FSB5_BANKS_MAX: usize = 4_096;
+
+/// Bytes in one FSB5 subsound name from the name table.
+pub const FSB5_NAME_BYTES_MAX: usize = 1_024;
+
+/// Subsound headers parsed in one FSB5 bank.
+pub const FSB5_SUBSOUNDS_MAX: usize = 10_000;
+
+/// Largest single RPG Maker MV encrypted file the MV
+/// audio extractor will read whole.
+pub const MV_FILE_BYTES_MAX: u64 = 268_435_456;
+
+/// Encrypted audio files in one RPG Maker MV tree.
+pub const MV_FILES_MAX: usize = 100_000;
+
+/// Wall-clock bound for one external `vgmstream-cli`
+/// decode, seconds.
+pub const VGMSTREAM_TIMEOUT_SECS: u64 = 120;
+
 /// Largest node count the FBX census will walk.
 pub const FBX_NODES_MAX: usize = 1_000_000;
 
