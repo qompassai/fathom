@@ -27,6 +27,24 @@ pub const BEAM_ATOMS_MAX: usize = 20_000;
 /// retained from one BEAM module (S6).
 pub const BEAM_FUNCTIONS_MAX: usize = 20_000;
 
+/// Serialized bytes of one behaviour-check ledger document
+/// (D-1097 behaviour-check stage).
+pub const BEHAVIOUR_BYTES_MAX: usize = 1_048_576;
+
+/// Canonical bytes of one behaviour obligation's claim or
+/// observed facts object (D-1097).
+pub const BEHAVIOUR_CLAIM_BYTES_MAX: usize = 16_384;
+
+/// Characters of one per-obligation evaluation diagnostic
+/// (D-1097).
+pub const BEHAVIOUR_DIAGNOSTIC_CHARS_MAX: usize = 512;
+
+/// Obligations in one behaviour-check ledger (D-1097).
+pub const BEHAVIOUR_OBLIGATIONS_MAX: usize = 256;
+
+/// Characters of one obligation's open reason (D-1097).
+pub const BEHAVIOUR_REASON_CHARS_MAX: usize = 512;
+
 /// Bytes in one byte-search pattern, wildcards included.
 pub const BYTE_PATTERN_BYTES_MAX: usize = 64;
 
