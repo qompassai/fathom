@@ -6,6 +6,7 @@
 //! build on this crate and never bypass it.
 #![forbid(unsafe_code)]
 
+pub mod behaviour;
 pub mod bundle;
 pub mod config;
 pub mod error;
