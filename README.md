@@ -4,6 +4,8 @@
 <!-- Copyright (c) 2026 Qompass AI -->
 <a href="./LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License: Apache 2.0"></a>
 <a href="https://doi.org/10.5281/zenodo.23503520"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.23503520.svg" alt="DOI"></a>
+<a href="https://crates.io/crates/fathom-mcp-server"><img src="https://img.shields.io/crates/v/fathom-mcp-server.svg" alt="crates.io"></a>
+<a href="https://registry.modelcontextprotocol.io/v0/servers/ai.qompass%2Ffathom/versions"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.modelcontextprotocol.io%2Fv0%2Fservers%2Fai.qompass%252Ffathom%2Fversions&query=%24.servers%5B0%5D.server.version&label=MCP%20Registry" alt="MCP Registry"></a>
 
 Current release: **1.0.0** (2026-10-29). Deferred items are listed in [COMPLIANCE.md](COMPLIANCE.md); release history in [CHANGELOG.md](CHANGELOG.md).
 
