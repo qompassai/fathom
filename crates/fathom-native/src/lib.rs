@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 pub mod aes;
+pub mod aotopsy;
 pub mod artifact;
 pub mod audio;
 pub mod audio_re;
@@ -432,6 +433,28 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(blutter::blutter_analyze),
+    );
+    registry.register(
+        descriptor(
+            "aotopsy_analyze",
+            ToolClass::Observe,
+            "aotopsy",
+            "Flutter/Dart AOT call-graph analysis with the pinned aotopsy tool \
+             (Observe; default-deny until allowlist-named): validates the \
+             arm64-v8a libapp.so/libflutter.so pair as ELF data through the \
+             blutter rung's fail-closed validation, runs aotopsy as a bounded \
+             child process, and ingests its JSONL streams (functions, classes, \
+             string refs, dispatch table) plus the call graph as a first-class \
+             record, with endpoint and behavioural signals flagged as findings \
+             candidates. The Dart version derives from engine-banner and \
+             snapshot-hash evidence, never from aotopsy's profile label",
+            target_and(
+                json!({"output_dir": {"type": "string",
+                    "description": "Output directory under a configured target root; defaults to the state dir"}}),
+                &[],
+            ),
+        ),
+        Arc::new(aotopsy::aotopsy_analyze),
     );
     registry.register(
         descriptor(
