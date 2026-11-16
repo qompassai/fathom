@@ -49,7 +49,11 @@ impl CardParams {
     pub fn fleet() -> Self {
         Self {
             command: "~/.GH/Qompass/fathom/target/release/fathom".to_string(),
-            command_args: vec!["serve".to_string()],
+            command_args: vec![
+                "serve".to_string(),
+                "--profile".to_string(),
+                "full".to_string(),
+            ],
             description: "Clean-room reverse-engineering MCP server: artifact census and \
                           inspection across native, managed, JavaScript, and art/video \
                           providers, with evidence-carrying findings, a \
@@ -230,7 +234,7 @@ mod tests {
         assert_eq!(extension["required"], false);
         let invocation = &extension["params"]["invocation"];
         assert_eq!(invocation["transport"], "stdio");
-        assert_eq!(invocation["args"], json!(["serve"]));
+        assert_eq!(invocation["args"], json!(["serve", "--profile", "full"]));
         assert_eq!(invocation["protocolEra"], PROTOCOL_ERA);
         assert_eq!(extension["params"]["registryName"], "ai.qompass/fathom");
     }

@@ -97,7 +97,10 @@ fn card_declares_no_a2a_endpoint_and_carries_invocation() {
         invocation["command"],
         "~/.GH/Qompass/fathom/target/release/fathom"
     );
-    assert_eq!(invocation["args"], serde_json::json!(["serve"]));
+    assert_eq!(
+        invocation["args"],
+        serde_json::json!(["serve", "--profile", "full"])
+    );
     assert_eq!(invocation["protocolEra"], "2026-07-28");
     // The five tool groups are the card's skills.
     assert_eq!(card["skills"].as_array().map(Vec::len), Some(5));
