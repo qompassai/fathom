@@ -54,6 +54,7 @@ const PACKS: &[Pack] = &[
     Pack {
         name: "games",
         providers: &[
+            "aotopsy",
             "artifact",
             "audio",
             "beam",
