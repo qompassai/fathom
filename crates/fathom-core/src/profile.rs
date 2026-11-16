@@ -58,6 +58,7 @@ const PACKS: &[Pack] = &[
             "audio",
             "beam",
             "blender",
+            "blutter",
             "cri",
             "cubism",
             "dialogue",

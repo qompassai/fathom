@@ -94,7 +94,8 @@ mod tests {
         // The full build is the reference every profile scopes
         // from; its size is the census of record (185 at D-910;
         // 192 at the D-1355 landing, 2026-11-11: +7 from the
-        // audio-RE lane, the Unity expansion, and RPG Maker audio).
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 192);
+        // audio-RE lane, the Unity expansion, and RPG Maker audio;
+        // 193 at the D-1616 blutter rung, 2026-11-16: +1).
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 193);
     }
 }
