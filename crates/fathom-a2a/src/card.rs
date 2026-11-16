@@ -1,143 +1,176 @@
-//! The signed A2A agent card (SPEC §10).
+//! The A2A agent card, in the D-1607 fleet profile (D-1615).
 //!
-//! Skills derive from the tool registry. The signature covers
-//! the JCS canonicalization of the card without the `signature`
-//! field. Without an operator key the card is served with an
-//! explicit unsigned marker — a visible fact, not a silent
-//! forgery.
+//! Fathom's interface is MCP over stdio; it exposes no A2A
+//! endpoint. The card therefore declares exactly one interface
+//! under the fleet's custom MCP binding URI, whose `url` carries
+//! the stdio command under that binding's own semantics, and the
+//! invocation facts (transport, command, args, protocol era) ride
+//! in the matching `capabilities.extensions` entry. Fleet cards
+//! are unsigned (the A2A v1.0 JWS route is recorded future
+//! practice, not current practice), so the card carries no
+//! signature block, no top-level `url`, and no
+//! `stateTransitionHistory` (a field A2A v1.0 removed).
+//!
+//! The content of record is the committed static card at
+//! `.well-known/agent-card.json`. This generator mirrors it
+//! field-for-field from the same fleet constants, and
+//! `tests/manifest_agreement.rs` pins the two equal, so the
+//! served card and the committed card cannot drift apart
+//! silently.
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
-use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use serde_json::{Value, json};
-use std::path::Path;
 
-use fathom_core::error::{ErrorCode, FathomError};
-use fathom_core::registry::ToolDescriptor;
+/// The fleet's custom MCP-interface binding URI (D-1607). A
+/// breaking change to this binding mints a new URI version.
+pub const MCP_BINDING_URI: &str = "https://qompass.ai/extensions/mcp-interface/v1";
 
-use crate::jcs::canonicalize;
+/// The MCP protocol era the fleet serves (modern era only).
+pub const PROTOCOL_ERA: &str = "2026-07-28";
 
-/// Operator-facing card identity.
+/// Card identity and invocation facts. The interface `url` and
+/// the extension invocation `command` both come from `command`,
+/// so the join invariant between them holds by construction.
 #[derive(Clone, Debug)]
 pub struct CardParams {
+    pub command: String,
+    pub command_args: Vec<String>,
     pub description: String,
+    pub documentation_url: String,
     pub name: String,
     pub organization: String,
-    pub url: String,
+    pub provider_url: String,
+    pub registry_name: String,
     pub version: String,
 }
 
-/// Load an Ed25519 signing key from a file holding the base64 of
-/// a 32-byte seed. The file is operator material; keep it 0600.
-pub fn load_signing_key(path: &Path) -> Result<SigningKey, FathomError> {
-    let text = std::fs::read_to_string(path).map_err(|e| {
-        FathomError::new(
-            ErrorCode::ConfigurationInvalid,
-            format!("cannot read signing key {}: {e}", path.display()),
-        )
-    })?;
-    let bytes = BASE64.decode(text.trim()).map_err(|e| {
-        FathomError::new(
-            ErrorCode::ConfigurationInvalid,
-            format!("signing key is not base64: {e}"),
-        )
-    })?;
-    let seed: [u8; 32] = bytes.try_into().map_err(|_| {
-        FathomError::new(
-            ErrorCode::ConfigurationInvalid,
-            "signing key seed must be exactly 32 bytes",
-        )
-    })?;
-    Ok(SigningKey::from_bytes(&seed))
+impl CardParams {
+    /// The fleet card's own parameters: the values the committed
+    /// static card at `.well-known/agent-card.json` carries.
+    pub fn fleet() -> Self {
+        Self {
+            command: "~/.GH/Qompass/fathom/target/release/fathom".to_string(),
+            command_args: vec!["serve".to_string()],
+            description: "Clean-room reverse-engineering MCP server: artifact census and \
+                          inspection across native, managed, JavaScript, and art/video \
+                          providers, with evidence-carrying findings, a \
+                          reconstruction-proof ledger, and a policy engine classifying \
+                          every tool read, observe, or execute. This card is a discovery \
+                          record and capability manifest for catalogues, registries, and \
+                          client-config generators; the interface declared here is \
+                          Fathom's MCP over stdio."
+                .to_string(),
+            documentation_url: "https://github.com/qompassai/fathom".to_string(),
+            name: "Fathom".to_string(),
+            organization: "Qompass AI".to_string(),
+            provider_url: "https://qompass.ai".to_string(),
+            registry_name: "ai.qompass/fathom".to_string(),
+            version: "1.0.0".to_string(),
+        }
+    }
 }
 
-/// Build the card value, signed when a key is supplied.
-pub fn build_card(
-    params: &CardParams,
-    tools: &[ToolDescriptor],
-    signing_key: Option<&SigningKey>,
-) -> Result<Value, FathomError> {
-    let mut skills: Vec<Value> = tools
-        .iter()
-        .map(|tool| {
-            json!({
-                "id": tool.name,
-                "name": tool.name,
-                "description": tool.description,
-                "tags": [tool.tool_class.as_str(), tool.provider.as_str()],
-            })
-        })
-        .collect();
-    skills.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
-    let mut card = json!({
+/// The card's skills: Fathom's tool groups, as the static card
+/// groups them (one skill per group, never one per tool).
+fn skills() -> Vec<Value> {
+    vec![
+        json!({
+            "id": "artifact-census",
+            "name": "Artifact census and inspection",
+            "description": "Stateless per-call census and inspection of artifacts across \
+                            providers: binaries, Android APKs, asar/Electron apps, managed \
+                            assemblies, firmware, Godot packs, Python artifacts, source \
+                            maps, and web captures (inspect_artifact, binary_overview, \
+                            inspect_android_apk, inspect_asar, inspect_managed_assembly, \
+                            inspect_firmware, inspect_godot_pck, inspect_python_artifact, \
+                            inspect_source_map, inspect_web_capture).",
+            "tags": ["mcp", "reverse-engineering", "census"],
+        }),
+        json!({
+            "id": "binary-analysis",
+            "name": "Binary analysis",
+            "description": "Ghidra-provider analysis: function listing and deep analysis, \
+                            names, strings, JavaScript application analysis, and artifact \
+                            comparison (list_functions, analyze_function, list_names, \
+                            list_strings, analyze_javascript_application, \
+                            compare_artifacts).",
+            "tags": ["mcp", "reverse-engineering", "ghidra"],
+        }),
+        json!({
+            "id": "reconstruction-ledger",
+            "name": "Reconstruction-proof ledger",
+            "description": "Build the reconstruction obligation ledger from findings, \
+                            manage its proof objects, and export evidence bundles \u{2014} \
+                            the claim model a clean-room rebuild must discharge \
+                            (build_reconstruction_obligation_ledger, \
+                            delete_reconstruction_proof, export_evidence_bundle).",
+            "tags": ["mcp", "reverse-engineering", "evidence"],
+        }),
+        json!({
+            "id": "media-re",
+            "name": "Art and video RE",
+            "description": "Art-style analysis, palette remapping, style application via \
+                            lumen, and the video-RE lane: ingest, read, guide-building, \
+                            and ingest management (analyze_art_style, remap_palette, \
+                            apply_style_via_lumen, ingest_youtube_video, \
+                            read_video_ingest, build_video_guide, delete_video_ingest).",
+            "tags": ["mcp", "reverse-engineering", "media"],
+        }),
+        json!({
+            "id": "observation",
+            "name": "Observation",
+            "description": "Observe- and execute-class capture under the policy engine: \
+                            headless-browser DOM inventory and process capture \
+                            (observe_browser, capture_process).",
+            "tags": ["mcp", "reverse-engineering", "observe"],
+        }),
+    ]
+}
+
+/// Build the card value in the D-1607 fleet profile.
+pub fn build_card(params: &CardParams) -> Value {
+    json!({
         "name": params.name,
         "description": params.description,
-        "url": params.url,
+        "documentationUrl": params.documentation_url,
         "version": params.version,
-        "provider": {"organization": params.organization},
-        "capabilities": {"pushNotifications": false, "streaming": false},
+        "provider": {
+            "organization": params.organization,
+            "url": params.provider_url,
+        },
+        "supportedInterfaces": [{
+            "protocolBinding": MCP_BINDING_URI,
+            "protocolVersion": "1.0",
+            "url": params.command,
+        }],
+        "capabilities": {
+            "pushNotifications": false,
+            "streaming": false,
+            "extensions": [{
+                "uri": MCP_BINDING_URI,
+                "description": "This agent's interface is MCP over stdio, not A2A. The \
+                                card is a capability manifest and discovery record, not \
+                                an A2A endpoint declaration; no A2A endpoint exists for \
+                                this agent. The params carry the invocation facts a \
+                                client config generator needs to wire this server from \
+                                the card alone.",
+                "required": false,
+                "params": {
+                    "implementation": "rmcp",
+                    "interface": "mcp",
+                    "invocation": {
+                        "args": params.command_args,
+                        "command": params.command,
+                        "protocolEra": PROTOCOL_ERA,
+                        "transport": "stdio",
+                    },
+                    "registryName": params.registry_name,
+                },
+            }],
+        },
         "defaultInputModes": ["application/json"],
         "defaultOutputModes": ["application/json"],
-        "skills": skills,
-    });
-    match signing_key {
-        Some(key) => {
-            let canonical = canonicalize(&card)?;
-            let signature = key.sign(canonical.as_bytes());
-            let verifying = key.verifying_key();
-            card["signature"] = json!({
-                "alg": "Ed25519",
-                "kid": BASE64.encode(verifying.to_bytes()),
-                "value": BASE64.encode(signature.to_bytes()),
-            });
-        }
-        None => {
-            card["signature"] = json!({
-                "alg": "none",
-                "status": "unsigned — no signing key configured",
-            });
-        }
-    }
-    Ok(card)
-}
-
-/// Verify a card's signature against a verifying key.
-pub fn verify_card_signature(
-    card: &Value,
-    verifying_key: &VerifyingKey,
-) -> Result<bool, FathomError> {
-    let signature_block = card
-        .get("signature")
-        .ok_or_else(|| FathomError::new(ErrorCode::InvalidRequest, "card has no signature"))?;
-    let value = signature_block
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            FathomError::new(
-                ErrorCode::InvalidRequest,
-                "card signature is absent or unsigned",
-            )
-        })?;
-    let signature_bytes = BASE64.decode(value).map_err(|e| {
-        FathomError::new(
-            ErrorCode::EvidenceIntegrityMismatch,
-            format!("signature is not base64: {e}"),
-        )
-    })?;
-    let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|e| {
-        FathomError::new(
-            ErrorCode::EvidenceIntegrityMismatch,
-            format!("signature has the wrong shape: {e}"),
-        )
-    })?;
-    let mut unsigned = card.clone();
-    if let Some(object) = unsigned.as_object_mut() {
-        object.remove("signature");
-    }
-    let canonical = canonicalize(&unsigned)?;
-    Ok(verifying_key
-        .verify(canonical.as_bytes(), &signature)
-        .is_ok())
+        "skills": skills(),
+    })
 }
 
 /// An axum route serving the card at the A2A well-known path.
@@ -154,56 +187,70 @@ pub fn card_router(card: Value) -> axum::Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fathom_core::policy::ToolClass;
-    use fathom_core::registry::Availability;
 
-    fn params() -> CardParams {
-        CardParams {
-            description: "test card".to_string(),
-            name: "fathom".to_string(),
-            organization: "Qompass AI".to_string(),
-            url: "http://127.0.0.1:8731".to_string(),
-            version: "0.1.0".to_string(),
-        }
-    }
-
-    fn tool(name: &str) -> ToolDescriptor {
-        ToolDescriptor {
-            name: name.to_string(),
-            tool_class: ToolClass::Read,
-            provider: "core".to_string(),
-            description: "a tool".to_string(),
-            input_schema: json!({"type": "object"}),
-            availability: Availability::Available,
-        }
+    #[test]
+    fn adversarial_card_carries_no_removed_or_custom_fields() {
+        let card = build_card(&CardParams::fleet());
+        // A2A v1.0 removed these; the pre-profile card emitted the
+        // first two. None may reappear.
+        assert!(card.get("url").is_none(), "no top-level url");
+        assert!(card.get("signature").is_none(), "no signature block");
+        assert!(card.get("signatures").is_none(), "fleet cards are unsigned");
+        assert!(
+            card["capabilities"].get("stateTransitionHistory").is_none(),
+            "stateTransitionHistory was removed in A2A v1.0"
+        );
     }
 
     #[test]
-    fn adversarial_tampered_card_fails_verification() {
-        let key = SigningKey::from_bytes(&[7_u8; 32]);
-        let mut card = build_card(&params(), &[tool("alpha")], Some(&key)).unwrap();
-        card["description"] = json!("forged description");
-        assert!(!verify_card_signature(&card, &key.verifying_key()).unwrap());
+    fn adversarial_command_change_moves_both_join_sides_together() {
+        let mut params = CardParams::fleet();
+        params.command = "/elsewhere/fathom".to_string();
+        let card = build_card(&params);
+        assert_eq!(card["supportedInterfaces"][0]["url"], "/elsewhere/fathom");
+        assert_eq!(
+            card["capabilities"]["extensions"][0]["params"]["invocation"]["command"],
+            "/elsewhere/fathom"
+        );
     }
 
     #[test]
-    fn validation_signed_card_verifies() {
-        let key = SigningKey::from_bytes(&[7_u8; 32]);
-        let card = build_card(&params(), &[tool("alpha")], Some(&key)).unwrap();
-        assert!(verify_card_signature(&card, &key.verifying_key()).unwrap());
+    fn validation_card_declares_exactly_one_mcp_interface() {
+        let card = build_card(&CardParams::fleet());
+        let interfaces = card["supportedInterfaces"].as_array().unwrap();
+        assert_eq!(interfaces.len(), 1);
+        assert_eq!(interfaces[0]["protocolBinding"], MCP_BINDING_URI);
+        assert_eq!(interfaces[0]["protocolVersion"], "1.0");
+        assert_eq!(
+            interfaces[0]["url"],
+            "~/.GH/Qompass/fathom/target/release/fathom"
+        );
+        let extension = &card["capabilities"]["extensions"][0];
+        assert_eq!(extension["uri"], MCP_BINDING_URI);
+        assert_eq!(extension["required"], false);
+        let invocation = &extension["params"]["invocation"];
+        assert_eq!(invocation["transport"], "stdio");
+        assert_eq!(invocation["args"], json!(["serve"]));
+        assert_eq!(invocation["protocolEra"], PROTOCOL_ERA);
+        assert_eq!(extension["params"]["registryName"], "ai.qompass/fathom");
     }
 
     #[test]
-    fn validation_unsigned_card_says_so() {
-        let card = build_card(&params(), &[], None).unwrap();
-        assert_eq!(card["signature"]["alg"], "none");
-    }
-
-    #[test]
-    fn validation_skills_derive_from_registry() {
-        let card = build_card(&params(), &[tool("beta"), tool("alpha")], None).unwrap();
+    fn validation_card_provider_and_skills_match_the_static_card() {
+        let card = build_card(&CardParams::fleet());
+        assert_eq!(card["provider"]["organization"], "Qompass AI");
+        assert_eq!(card["provider"]["url"], "https://qompass.ai");
         let skills = card["skills"].as_array().unwrap();
-        assert_eq!(skills.len(), 2);
-        assert_eq!(skills[0]["id"], "alpha");
+        let ids: Vec<&str> = skills.iter().map(|s| s["id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            [
+                "artifact-census",
+                "binary-analysis",
+                "reconstruction-ledger",
+                "media-re",
+                "observation"
+            ]
+        );
     }
 }

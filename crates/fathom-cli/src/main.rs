@@ -37,12 +37,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Print the signed A2A agent card as JSON
-    Card {
-        /// Public URL the card advertises
-        #[arg(long)]
-        url: Option<String>,
-    },
+    /// Print the A2A agent card (D-1607 fleet profile) as JSON
+    Card,
     /// Report host facts: engines, config, catalog (facts, not fixes)
     Doctor,
     /// Serve MCP (stdio by default; --http for streamable HTTP + agent card)
@@ -76,8 +72,8 @@ fn run(cli: Cli) -> Result<(), FathomError> {
     let config = load_config(cli.config.as_deref())?;
     let registry = composition::build_registry();
     match cli.command {
-        Command::Card { url } => {
-            let card = build_card(&config, &registry, url.as_deref())?;
+        Command::Card => {
+            let card = fathom_a2a::build_card(&fathom_a2a::CardParams::fleet());
             println!(
                 "{}",
                 serde_json::to_string_pretty(&card).unwrap_or_default()
@@ -128,27 +124,6 @@ fn load_config(explicit: Option<&std::path::Path>) -> Result<Config, FathomError
     Ok(Config::restrictive_default())
 }
 
-fn build_card(
-    config: &Config,
-    registry: &Registry,
-    url: Option<&str>,
-) -> Result<Value, FathomError> {
-    let signing = match &config.signing_key_file {
-        Some(path) => Some(fathom_a2a::load_signing_key(path)?),
-        None => None,
-    };
-    let params = fathom_a2a::CardParams {
-        description: "Evidence-first reverse-engineering tools: native binaries, JavaScript/Electron, .NET, web captures, EVM, process behavior".to_string(),
-        name: fathom_core::PRODUCT_NAME.to_string(),
-        organization: "Qompass AI".to_string(),
-        url: url
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("http://{}", config.http_bind)),
-        version: fathom_core::VERSION.to_string(),
-    };
-    fathom_a2a::build_card(&params, &registry.descriptors(), signing.as_ref())
-}
-
 fn doctor(config: &Config, registry: &Registry) -> Value {
     let descriptors = registry.descriptors();
     let available = descriptors
@@ -187,7 +162,7 @@ fn serve_http(config: Config, registry: Registry) -> Result<(), FathomError> {
         )
     })?;
     runtime.block_on(async move {
-        let card = build_card(&config, &registry, None)?;
+        let card = fathom_a2a::build_card(&fathom_a2a::CardParams::fleet());
         let state = Arc::new(fathom_mcp_server::http::HttpState {
             config: Arc::new(config),
             registry: Arc::new(registry),

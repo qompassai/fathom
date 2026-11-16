@@ -34,7 +34,6 @@ version = "1.0.0"
 axum = "0.8"
 base64 = "0.22"
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = "2"
 oxc_allocator = "0.153"
 oxc_ast = "0.153"
 oxc_ast_visit = "0.153"
