@@ -14,6 +14,7 @@ pub mod audio;
 pub mod audio_re;
 pub mod beam;
 pub mod blend;
+pub mod blutter;
 pub mod cubism;
 pub mod dialogue;
 pub mod engine;
@@ -404,11 +405,33 @@ pub fn register(registry: &mut Registry) {
             "game",
             "Game-tree census and unified extraction manifest: engine fingerprint \
              with its evidence (Unity, Unreal, Ren'Py, RPG Maker, KiriKiri/Tyrano, \
-             GameMaker, Electron/NW.js), container inventory with SHA-256 and the \
+             GameMaker, Flutter/Dart AOT, Electron/NW.js), container inventory with SHA-256 and the \
              reader that censuses each, and per-class asset counts",
             target_schema(),
         ),
         Arc::new(game::census_game_tree),
+    );
+    registry.register(
+        descriptor(
+            "blutter_analyze",
+            ToolClass::Observe,
+            "blutter",
+            "Flutter/Dart AOT analysis with the pinned blutter tool (Observe; \
+             default-deny until allowlist-named): validates the arm64-v8a \
+             libapp.so/libflutter.so pair as ELF data, runs blutter as a \
+             bounded child process, and ingests the asm census (libraries, \
+             classes, functions, symbols), the pp.txt object pool (strings \
+             and constants, with URL-like and credential-like entries \
+             flagged as findings candidates), and the objs.txt summary. \
+             blutter_frida.js is recorded as a referenced artifact only: \
+             never executed, never sent to a device",
+            target_and(
+                json!({"output_dir": {"type": "string",
+                    "description": "Output directory under a configured target root; defaults to the state dir"}}),
+                &[],
+            ),
+        ),
+        Arc::new(blutter::blutter_analyze),
     );
     registry.register(
         descriptor(

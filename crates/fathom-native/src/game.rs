@@ -357,6 +357,21 @@ fn fingerprint(files: &[String], dirs: &[String]) -> (Option<Candidate>, Vec<Str
             variant: "gamemaker",
         });
     }
+    // Flutter/Dart AOT: the arm64-v8a library pair of an
+    // Android Flutter build (libapp.so is the Dart AOT
+    // snapshot, libflutter.so the engine). Both files must
+    // be present; a lone libapp.so is not a Flutter verdict.
+    if has_file(&|f| f.ends_with("lib/arm64-v8a/libapp.so"))
+        && has_file(&|f| f.ends_with("lib/arm64-v8a/libflutter.so"))
+    {
+        candidates.push(Candidate {
+            engine: "flutter",
+            evidence: "Flutter/Dart AOT library pair (lib/arm64-v8a/libapp.so + libflutter.so)"
+                .to_string(),
+            strength: 95,
+            variant: "flutter-dart-aot",
+        });
+    }
     // Electron / NW.js runtimes (weakest: wrappers, not
     // game engines — they lose to any engine above).
     // Godot: a .pck data pack, the .NET bindings, the
@@ -1393,6 +1408,30 @@ mod tests {
         assert_ne!(manifest["engine"]["name"], "unreal");
         assert_eq!(manifest["engine"]["name"], "nwjs");
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validation_flutter_tree() {
+        let files: CaseFiles = vec![
+            ("lib/arm64-v8a/libapp.so", b"a".to_vec()),
+            ("lib/arm64-v8a/libflutter.so", b"f".to_vec()),
+            ("assets/flutter_assets/AssetManifest.bin", b"m".to_vec()),
+        ];
+        let (root, result) = run_game("flutter", &files);
+        let value = result.unwrap();
+        let manifest = manifest_of(&value);
+        assert_eq!(manifest["engine"]["name"], "flutter");
+        assert_eq!(manifest["engine"]["variant"], "flutter-dart-aot");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn adversarial_lone_libapp_is_not_flutter() {
+        let files: CaseFiles = vec![("lib/arm64-v8a/libapp.so", b"a".to_vec())];
+        let (root, result) = run_game("lone-libapp", &files);
+        let value = result.unwrap();
+        assert_ne!(manifest_of(&value)["engine"]["name"], "flutter");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]
