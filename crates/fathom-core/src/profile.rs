@@ -68,6 +68,7 @@ const PACKS: &[Pack] = &[
             "gamemaker",
             "godot",
             "gpu",
+            "jadart",
             "kirikiri",
             "local",
             "mesh",

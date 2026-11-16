@@ -96,7 +96,8 @@ mod tests {
         // 192 at the D-1355 landing, 2026-11-11: +7 from the
         // audio-RE lane, the Unity expansion, and RPG Maker audio;
         // 193 at the D-1616 blutter rung, 2026-11-16: +1;
-        // 194 at the D-1620 aotopsy lane, 2026-11-16: +1).
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 194);
+        // 194 at the D-1620 aotopsy lane, 2026-11-16: +1;
+        // 195 at the D-1620 jadart lane, 2026-11-16: +1).
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 195);
     }
 }
