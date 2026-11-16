@@ -26,6 +26,7 @@ pub mod godot;
 pub mod gpu;
 pub mod il2cpp;
 pub mod iostore;
+pub mod jadart;
 pub mod keyhunt;
 pub mod kirikiri;
 pub mod layout;
@@ -455,6 +456,29 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(aotopsy::aotopsy_analyze),
+    );
+    registry.register(
+        descriptor(
+            "jadart_decompile",
+            ToolClass::Observe,
+            "jadart",
+            "Flutter/Dart AOT pseudo-Dart decompilation with the pinned jadart tool \
+             (Observe; default-deny until allowlist-named): validates the target \
+             (APK/IPA zip, bare libapp.so, iOS App Mach-O binary, or a directory \
+             holding one) as container data through fail-closed ELF, Mach-O, and \
+             zip validation, runs jadart as a bounded child process in JSON mode, \
+             and ingests the snapshot header, the class tree, the function census, \
+             the string pool, and the constants table, plus jadart's byte-exact \
+             verify gates and the exported per-library pseudo-Dart preserved \
+             verbatim as evidence. Jadart's typed JSON errors map one-for-one \
+             onto fathom typed errors with their type and offset detail intact",
+            target_and(
+                json!({"output_dir": {"type": "string",
+                    "description": "Output directory under a configured target root; defaults to the state dir"}}),
+                &[],
+            ),
+        ),
+        Arc::new(jadart::jadart_decompile),
     );
     registry.register(
         descriptor(
