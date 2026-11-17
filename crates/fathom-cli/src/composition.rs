@@ -103,6 +103,8 @@ mod tests {
         // 197 at the D-1664 texture-codec rung 1 landing,
         // 2026-11-16: +1 from the texture-codec rung (D-1654),
         // decode_unity_textures).
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 197);
+        // 198 at the D-1651 MV/MZ landing, 2026-11-17: +1 for
+        // the RPG Maker MV/MZ encrypted-image lane.
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 198);
     }
 }
