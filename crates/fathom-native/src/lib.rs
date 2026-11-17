@@ -37,6 +37,7 @@ pub mod resources;
 pub mod rpgmaker;
 pub mod sections;
 pub mod spec;
+pub mod texture_codec;
 pub mod uasset;
 pub mod ui;
 pub mod unity;
@@ -961,6 +962,27 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(unity::extract_unity_bundle),
+    );
+    registry.register(
+        descriptor(
+            "decode_unity_textures",
+            ToolClass::Observe,
+            "unity",
+            "Decode BC1 (DXT1) and BC3 (DXT5) Texture2D objects from the loose \
+             SerializedFiles under a target directory (or a single .assets \
+             target) into per-mip-level .rgba files under an output directory, \
+             with a JSON manifest (name, format, dimensions, per-level SHA-256). \
+             Layouts are pinned per Unity generator version (D-1654 census era \
+             map) and validated by mip-chain size arithmetic; streamed textures \
+             resolve only against a sibling .resS resource file; other formats, \
+             bundle targets, and archive:/ stream paths are recorded as \
+             unsupported, never guessed",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(texture_codec::decode_unity_textures),
     );
     registry.register(
         descriptor(
