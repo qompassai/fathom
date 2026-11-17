@@ -1,9 +1,12 @@
-//! Clean-room Unity Texture2D BC1/BC3 codec (D-1654 rung 1).
+//! Clean-room Unity Texture2D codec (D-1654 rungs 1-2).
 //!
-//! Scope: decode Texture2D objects whose TextureFormat is DXT1
-//! (10, BC1) or DXT5 (12, BC3) into RGBA pixels, end to end:
-//! serialized object bytes -> metadata + image-data placement ->
-//! per-mip-level RGBA buffers.
+//! Scope: decode Texture2D objects whose TextureFormat is
+//! DXT1 (10, BC1) or DXT5 (12, BC3) — rung 1 — or one of
+//! the uncompressed formats of rung 2 (Alpha8 1, ARGB4444
+//! 2, RGB24 3, RGBA32 4, ARGB32 5, RGB565 7, RGBA4444 13,
+//! RGBAHalf 17, RFloat 18, RGBAFloat 20, R8 63) into RGBA
+//! pixels, end to end: serialized object bytes -> metadata
+//! + image-data placement -> per-mip-level RGBA buffers.
 //!
 //! Spec provenance (implementation inputs, nothing else):
 //! - Microsoft, "Block Compression (Direct3D 10)": the BC1 and
@@ -20,6 +23,11 @@
 //! - Khronos GL_EXT_texture_compression_s3tc: cross-reference
 //!   for the endpoint-ordering rule (color_0 > color_1 selects
 //!   the four-color form) and the RGB565 bit layout.
+//! - Unity's public TextureFormat documentation: the format
+//!   codes and the uncompressed channel layouts (byte and
+//!   nibble order follow the format name's channel order;
+//!   the 16-bit formats are little-endian). IEEE 754 for
+//!   the half and float channels.
 //! - Texture2D serialized layouts: estate measurement only
 //!   (D-1654 rung 0 census): one layout is pinned per Unity
 //!   generator version and validated by the size-arithmetic
@@ -30,12 +38,25 @@
 //!   were measured from held titles' object bytes in the
 //!   census follow-up probes recorded in the rung record.
 //!
+//! Conventions the public documents do not state were
+//! pinned by the differential against the oracle, never
+//! assumed (rung 2 record): the vertical flip (rung 1);
+//! Alpha8 decodes as black under the recorded alpha;
+//! the plain RGB565 expansion is shift-only, unlike the
+//! BC endpoints' bit replication; float channels clamp
+//! to [0, 1], scale by 255, and truncate.
+//!
 //! AssetRipper is a black-box test oracle only (differential
 //! fixtures); no decoder implementation was consulted.
 //!
 //! Boundaries (stated, never silent): Crunch-wrapped formats
-//! (28/29) and every non-BC format are rejected by the decoder
-//! with a typed error; streamed image data is resolved by the
+//! (28/29) and every still-unsupported format (the BC7 /
+//! BC6H / BC4 / BC5 family, ETC, ASTC, and the tail) are
+//! rejected by the decoder with a typed error; R8 decodes
+//! from the documented layout but carries no differential
+//! fixture yet (its only census carriers are
+//! bundle-resident or in an unwalked title — rung 2
+//! record); streamed image data is resolved by the
 //! caller supplying the resource (.resS) bytes — this module
 //! never touches the filesystem for image data; the
 //! `decode_unity_textures` tool resolves streamed data only
@@ -60,6 +81,28 @@ use crate::unity::parse_serialized_file_capped;
 pub const TEXTURE_FORMAT_DXT1: i32 = 10;
 /// TextureFormat code for DXT5 (Unity public enum documentation).
 pub const TEXTURE_FORMAT_DXT5: i32 = 12;
+/// TextureFormat code for Alpha8 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_ALPHA8: i32 = 1;
+/// TextureFormat code for ARGB4444 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_ARGB4444: i32 = 2;
+/// TextureFormat code for RGB24 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGB24: i32 = 3;
+/// TextureFormat code for RGBA32 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGBA32: i32 = 4;
+/// TextureFormat code for ARGB32 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_ARGB32: i32 = 5;
+/// TextureFormat code for RGB565 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGB565: i32 = 7;
+/// TextureFormat code for RGBA4444 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGBA4444: i32 = 13;
+/// TextureFormat code for RGBAHalf (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGBAHALF: i32 = 17;
+/// TextureFormat code for RFloat (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RFLOAT: i32 = 18;
+/// TextureFormat code for RGBAFloat (Unity public enum documentation).
+pub const TEXTURE_FORMAT_RGBAFLOAT: i32 = 20;
+/// TextureFormat code for R8 (Unity public enum documentation).
+pub const TEXTURE_FORMAT_R8: i32 = 63;
 /// Class id of Texture2D in a SerializedFile.
 const CLASS_TEXTURE_2D: i64 = 28;
 /// Largest decoded RGBA output one decode may produce.
@@ -101,7 +144,7 @@ pub enum TextureError {
     InvalidStreamingInfo { context: &'static str },
     /// Non-zero or oversized trailing bytes after the object.
     InvalidTrailingBytes { count: usize },
-    /// The format is not one this rung decodes (BC1/BC3 only).
+    /// The format is not one this codec decodes.
     UnsupportedFormat { code: i32 },
     /// No layout is pinned for this Unity generator version.
     UnsupportedLayout { version: String },
@@ -145,7 +188,8 @@ impl fmt::Display for TextureError {
             TextureError::UnsupportedFormat { code } => {
                 write!(
                     f,
-                    "unsupported TextureFormat code {code} (rung 1: DXT1/DXT5)"
+                    "unsupported TextureFormat code {code} (supported: DXT1/DXT5 \
+                     and the rung 2 uncompressed family)"
                 )
             }
             TextureError::UnsupportedLayout { version } => {
@@ -163,21 +207,64 @@ impl fmt::Display for TextureError {
 
 impl std::error::Error for TextureError {}
 
-/// The two block formats this rung decodes.
+/// The pixel formats this codec decodes: the block
+/// formats of rung 1 (DXT1/DXT5) and the uncompressed
+/// family of rung 2. Channel layouts are Unity's public
+/// TextureFormat documentation: byte and nibble order
+/// follow the format name's channel order.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BlockFormat {
+pub enum PixelFormat {
     /// DXT1 (TextureFormat 10): 8 bytes per 4x4 block.
     Bc1,
     /// DXT5 (TextureFormat 12): 16 bytes per 4x4 block.
     Bc3,
+    /// Alpha8 (TextureFormat 1): one alpha byte per pixel.
+    Alpha8,
+    /// ARGB4444 (TextureFormat 2): little-endian 16-bit,
+    /// nibbles A, R, G, B from the high nibble down.
+    Argb4444,
+    /// RGB24 (TextureFormat 3): bytes R, G, B per pixel.
+    Rgb24,
+    /// RGBA32 (TextureFormat 4): bytes R, G, B, A per pixel.
+    Rgba32,
+    /// ARGB32 (TextureFormat 5): bytes A, R, G, B per pixel.
+    Argb32,
+    /// RGB565 (TextureFormat 7): little-endian 16-bit
+    /// R5 G6 B5 (the BC endpoint layout).
+    Rgb565,
+    /// RGBA4444 (TextureFormat 13): little-endian 16-bit,
+    /// nibbles R, G, B, A from the high nibble down.
+    Rgba4444,
+    /// RGBAHalf (TextureFormat 17): four IEEE 754 half
+    /// floats (R, G, B, A) per pixel, 8 bytes.
+    RgbaHalf,
+    /// RFloat (TextureFormat 18): one IEEE 754 float
+    /// (red) per pixel.
+    RFloat,
+    /// RGBAFloat (TextureFormat 20): four IEEE 754 floats
+    /// (R, G, B, A) per pixel, 16 bytes.
+    RgbaFloat,
+    /// R8 (TextureFormat 63): one red byte per pixel.
+    R8,
 }
 
-impl BlockFormat {
+impl PixelFormat {
     /// Map a TextureFormat code to a decodable format.
-    pub fn from_format_code(code: i32) -> Result<BlockFormat, TextureError> {
+    pub fn from_format_code(code: i32) -> Result<PixelFormat, TextureError> {
         match code {
-            TEXTURE_FORMAT_DXT1 => Ok(BlockFormat::Bc1),
-            TEXTURE_FORMAT_DXT5 => Ok(BlockFormat::Bc3),
+            TEXTURE_FORMAT_DXT1 => Ok(PixelFormat::Bc1),
+            TEXTURE_FORMAT_DXT5 => Ok(PixelFormat::Bc3),
+            TEXTURE_FORMAT_ALPHA8 => Ok(PixelFormat::Alpha8),
+            TEXTURE_FORMAT_ARGB4444 => Ok(PixelFormat::Argb4444),
+            TEXTURE_FORMAT_RGB24 => Ok(PixelFormat::Rgb24),
+            TEXTURE_FORMAT_RGBA32 => Ok(PixelFormat::Rgba32),
+            TEXTURE_FORMAT_ARGB32 => Ok(PixelFormat::Argb32),
+            TEXTURE_FORMAT_RGB565 => Ok(PixelFormat::Rgb565),
+            TEXTURE_FORMAT_RGBA4444 => Ok(PixelFormat::Rgba4444),
+            TEXTURE_FORMAT_RGBAHALF => Ok(PixelFormat::RgbaHalf),
+            TEXTURE_FORMAT_RFLOAT => Ok(PixelFormat::RFloat),
+            TEXTURE_FORMAT_RGBAFLOAT => Ok(PixelFormat::RgbaFloat),
+            TEXTURE_FORMAT_R8 => Ok(PixelFormat::R8),
             _ => Err(TextureError::UnsupportedFormat { code }),
         }
     }
@@ -185,24 +272,63 @@ impl BlockFormat {
     /// The TextureFormat code of this format.
     pub fn format_code(self) -> i32 {
         match self {
-            BlockFormat::Bc1 => TEXTURE_FORMAT_DXT1,
-            BlockFormat::Bc3 => TEXTURE_FORMAT_DXT5,
+            PixelFormat::Bc1 => TEXTURE_FORMAT_DXT1,
+            PixelFormat::Bc3 => TEXTURE_FORMAT_DXT5,
+            PixelFormat::Alpha8 => TEXTURE_FORMAT_ALPHA8,
+            PixelFormat::Argb4444 => TEXTURE_FORMAT_ARGB4444,
+            PixelFormat::Rgb24 => TEXTURE_FORMAT_RGB24,
+            PixelFormat::Rgba32 => TEXTURE_FORMAT_RGBA32,
+            PixelFormat::Argb32 => TEXTURE_FORMAT_ARGB32,
+            PixelFormat::Rgb565 => TEXTURE_FORMAT_RGB565,
+            PixelFormat::Rgba4444 => TEXTURE_FORMAT_RGBA4444,
+            PixelFormat::RgbaHalf => TEXTURE_FORMAT_RGBAHALF,
+            PixelFormat::RFloat => TEXTURE_FORMAT_RFLOAT,
+            PixelFormat::RgbaFloat => TEXTURE_FORMAT_RGBAFLOAT,
+            PixelFormat::R8 => TEXTURE_FORMAT_R8,
         }
     }
 
-    /// Bytes per 4x4 block.
-    pub fn block_bytes(self) -> usize {
+    /// Bytes per pixel for the uncompressed formats;
+    /// `None` for the block-compressed formats, whose
+    /// storage unit is the 4x4 block.
+    pub fn bytes_per_pixel(self) -> Option<usize> {
         match self {
-            BlockFormat::Bc1 => 8,
-            BlockFormat::Bc3 => 16,
+            PixelFormat::Bc1 | PixelFormat::Bc3 => None,
+            PixelFormat::Alpha8 | PixelFormat::R8 => Some(1),
+            PixelFormat::Argb4444 | PixelFormat::Rgb565 | PixelFormat::Rgba4444 => Some(2),
+            PixelFormat::Rgb24 => Some(3),
+            PixelFormat::Rgba32 | PixelFormat::Argb32 | PixelFormat::RFloat => Some(4),
+            PixelFormat::RgbaHalf => Some(8),
+            PixelFormat::RgbaFloat => Some(16),
+        }
+    }
+
+    /// Bytes per 4x4 block for the block-compressed
+    /// formats; `None` for the uncompressed formats.
+    pub fn block_bytes(self) -> Option<usize> {
+        match self {
+            PixelFormat::Bc1 => Some(8),
+            PixelFormat::Bc3 => Some(16),
+            _ => None,
         }
     }
 
     /// Short name for records.
     pub fn name(self) -> &'static str {
         match self {
-            BlockFormat::Bc1 => "DXT1",
-            BlockFormat::Bc3 => "DXT5",
+            PixelFormat::Bc1 => "DXT1",
+            PixelFormat::Bc3 => "DXT5",
+            PixelFormat::Alpha8 => "Alpha8",
+            PixelFormat::Argb4444 => "ARGB4444",
+            PixelFormat::Rgb24 => "RGB24",
+            PixelFormat::Rgba32 => "RGBA32",
+            PixelFormat::Argb32 => "ARGB32",
+            PixelFormat::Rgb565 => "RGB565",
+            PixelFormat::Rgba4444 => "RGBA4444",
+            PixelFormat::RgbaHalf => "RGBAHalf",
+            PixelFormat::RFloat => "RFloat",
+            PixelFormat::RgbaFloat => "RGBAFloat",
+            PixelFormat::R8 => "R8",
         }
     }
 }
@@ -446,11 +572,22 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// Expected byte size of one mip level of a block format.
-pub fn level_byte_size(format: BlockFormat, width: u32, height: u32) -> u64 {
+/// Expected byte size of one mip level: whole 4x4
+/// blocks for the block formats, an exact pixel count
+/// times the bytes per pixel for the uncompressed
+/// formats (no row padding in either family).
+pub fn level_byte_size(format: PixelFormat, width: u32, height: u32) -> u64 {
+    if let Some(bytes_per_pixel) = format.bytes_per_pixel() {
+        return u64::from(width) * u64::from(height) * bytes_per_pixel as u64;
+    }
+    // Block formats: exactly one of the two size views is
+    // `Some` per format by construction; a format with
+    // neither would size to 0 and fail the caller's
+    // size-arithmetic check as a typed mismatch.
+    let block_bytes = format.block_bytes().unwrap_or(0) as u64;
     let blocks_x = u64::from(width.div_ceil(4));
     let blocks_y = u64::from(height.div_ceil(4));
-    blocks_x * blocks_y * format.block_bytes() as u64
+    blocks_x * blocks_y * block_bytes
 }
 
 /// Dimensions of one mip level (halved, floored at 1).
@@ -460,7 +597,7 @@ pub fn level_dimensions(width: u32, height: u32, level: u32) -> (u32, u32) {
 
 /// Expected byte size of a full mip chain — the census
 /// size-arithmetic check, reused as a parse-time invariant.
-pub fn expected_image_size(format: BlockFormat, width: u32, height: u32, mip_count: u32) -> u64 {
+pub fn expected_image_size(format: PixelFormat, width: u32, height: u32, mip_count: u32) -> u64 {
     let mut total: u64 = 0;
     for level in 0..mip_count {
         let (w, h) = level_dimensions(width, height, level);
@@ -471,7 +608,7 @@ pub fn expected_image_size(format: BlockFormat, width: u32, height: u32, mip_cou
 
 /// Parse one Texture2D object payload under its era's
 /// pinned layout. Validates dimensions, format window, mip
-/// count, the size-arithmetic identity for BC formats, the
+/// count, the size-arithmetic identity for supported formats, the
 /// image-data length, and the StreamingInfo tail. Any
 /// disagreement is a typed error — layouts are never raced.
 pub fn parse_texture2d_object(
@@ -511,7 +648,7 @@ pub fn parse_texture2d_object(
     let width_u = width as u32;
     let height_u = height as u32;
     let mip_count_u = mip_count as u32;
-    if let Ok(format) = BlockFormat::from_format_code(format_code) {
+    if let Ok(format) = PixelFormat::from_format_code(format_code) {
         let expected = expected_image_size(format, width_u, height_u, mip_count_u);
         if expected != complete_image_size as u64 {
             return Err(TextureError::ImageSizeMismatch {
@@ -627,7 +764,7 @@ impl Texture2dObject {
     /// Decode every mip level to RGBA, in chain order.
     /// `resource` is required iff the texture is streamed.
     pub fn decode_rgba(&self, resource: Option<&[u8]>) -> Result<Vec<DecodedLevel>, TextureError> {
-        let format = BlockFormat::from_format_code(self.format_code)?;
+        let format = PixelFormat::from_format_code(self.format_code)?;
         let data = self.image_data(resource)?;
         decode_mip_chain(format, data, self.width, self.height, self.mip_count)
     }
@@ -647,10 +784,10 @@ pub struct DecodedLevel {
     pub rgba: Vec<u8>,
 }
 
-/// Decode a full mip chain of block data. The data length
+/// Decode a full mip chain of image data. The data length
 /// must equal the expected chain size exactly.
 pub fn decode_mip_chain(
-    format: BlockFormat,
+    format: PixelFormat,
     data: &[u8],
     width: u32,
     height: u32,
@@ -693,10 +830,10 @@ pub fn decode_mip_chain(
     Ok(levels)
 }
 
-/// Decode one mip level's block data to RGBA. The data
-/// length must equal the level's expected block bytes.
+/// Decode one mip level's image data to RGBA. The data
+/// length must equal the level's expected byte size.
 pub fn decode_level(
-    format: BlockFormat,
+    format: PixelFormat,
     data: &[u8],
     width: u32,
     height: u32,
@@ -725,17 +862,39 @@ pub fn decode_level(
         });
     }
     let mut rgba = vec![0_u8; output_bytes];
+    match format {
+        PixelFormat::Bc1 | PixelFormat::Bc3 => {
+            decode_block_level(format, data, width, height, &mut rgba);
+        }
+        _ => decode_plain_level(format, data, &mut rgba),
+    }
+    Ok(DecodedLevel {
+        width,
+        height,
+        rgba,
+    })
+}
+
+/// Decode one mip level of a block format into `rgba`
+/// (the rung 1 path: per-block decode, then copy out the
+/// visible texels of each padded 4x4 block).
+fn decode_block_level(format: PixelFormat, data: &[u8], width: u32, height: u32, rgba: &mut [u8]) {
+    let block_bytes = match format {
+        PixelFormat::Bc1 => 8,
+        PixelFormat::Bc3 => 16,
+        _ => return,
+    };
     let blocks_x = width.div_ceil(4) as usize;
-    let block_bytes = format.block_bytes();
     for block_y in 0..height.div_ceil(4) as usize {
         for block_x in 0..blocks_x {
             let block_index = block_y * blocks_x + block_x;
             let start = block_index * block_bytes;
             let block = &data[start..start + block_bytes];
             let mut pixels = [0_u8; 64];
-            match format {
-                BlockFormat::Bc1 => decode_color_block(block, false, &mut pixels),
-                BlockFormat::Bc3 => decode_bc3_block(block, &mut pixels),
+            if format == PixelFormat::Bc1 {
+                decode_color_block(block, false, &mut pixels);
+            } else {
+                decode_bc3_block(block, &mut pixels);
             }
             // Copy the block's visible texels (levels whose
             // dimensions are not multiples of 4 are padded;
@@ -757,11 +916,225 @@ pub fn decode_level(
             }
         }
     }
-    Ok(DecodedLevel {
-        width,
-        height,
-        rgba,
-    })
+}
+
+/// Decode one mip level of an uncompressed format into
+/// `rgba`. The caller has checked `data.len()` equals
+/// `width * height * bytes_per_pixel`, so the exact-size
+/// chunk iterators below cover every pixel exactly.
+/// Channel conventions the differential pins are stated
+/// per format in the rung 2 record: single-channel
+/// formats carry their value in the named channel with
+/// the remaining color channels 0 (R8 in red, Alpha8 in
+/// alpha over black), and float channels convert by
+/// clamping to [0, 1], scaling by 255, and truncating.
+fn decode_plain_level(format: PixelFormat, data: &[u8], rgba: &mut [u8]) {
+    match format {
+        PixelFormat::Rgba32 => rgba.copy_from_slice(data),
+        PixelFormat::Argb32 => {
+            for (source, target) in data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                target[0] = source[1];
+                target[1] = source[2];
+                target[2] = source[3];
+                target[3] = source[0];
+            }
+        }
+        PixelFormat::Rgb24 => {
+            for (source, target) in data
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                target[0] = source[0];
+                target[1] = source[1];
+                target[2] = source[2];
+                target[3] = 255;
+            }
+        }
+        PixelFormat::Alpha8 => {
+            for (source, target) in data.iter().zip(rgba.as_chunks_mut::<4>().0.iter_mut()) {
+                target[0] = 0;
+                target[1] = 0;
+                target[2] = 0;
+                target[3] = *source;
+            }
+        }
+        PixelFormat::Rgb565 => {
+            for (source, target) in data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let [red, green, blue] =
+                    expand_565_plain(u16::from_le_bytes([source[0], source[1]]));
+                target[0] = red;
+                target[1] = green;
+                target[2] = blue;
+                target[3] = 255;
+            }
+        }
+        PixelFormat::Argb4444 => {
+            for (source, target) in data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let value = u16::from_le_bytes([source[0], source[1]]);
+                target[0] = expand_4444(value >> 8);
+                target[1] = expand_4444(value >> 4);
+                target[2] = expand_4444(value);
+                target[3] = expand_4444(value >> 12);
+            }
+        }
+        PixelFormat::Rgba4444 => {
+            for (source, target) in data
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let value = u16::from_le_bytes([source[0], source[1]]);
+                target[0] = expand_4444(value >> 12);
+                target[1] = expand_4444(value >> 8);
+                target[2] = expand_4444(value >> 4);
+                target[3] = expand_4444(value);
+            }
+        }
+        PixelFormat::R8 => {
+            for (source, target) in data.iter().zip(rgba.as_chunks_mut::<4>().0.iter_mut()) {
+                target[0] = *source;
+                target[1] = 0;
+                target[2] = 0;
+                target[3] = 255;
+            }
+        }
+        PixelFormat::RgbaHalf => {
+            for (source, target) in data
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let pixel: [u8; 4] = std::array::from_fn(|channel| {
+                    let bits = u16::from_le_bytes([source[channel * 2], source[channel * 2 + 1]]);
+                    float_to_byte(half_to_f32(bits))
+                });
+                target.copy_from_slice(&pixel);
+            }
+        }
+        PixelFormat::RFloat => {
+            for (source, target) in data
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let value = f32::from_le_bytes([source[0], source[1], source[2], source[3]]);
+                target[0] = float_to_byte(value);
+                target[1] = 0;
+                target[2] = 0;
+                target[3] = 255;
+            }
+        }
+        PixelFormat::RgbaFloat => {
+            for (source, target) in data
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .zip(rgba.as_chunks_mut::<4>().0.iter_mut())
+            {
+                let pixel: [u8; 4] = std::array::from_fn(|channel| {
+                    let start = channel * 4;
+                    float_to_byte(f32::from_le_bytes([
+                        source[start],
+                        source[start + 1],
+                        source[start + 2],
+                        source[start + 3],
+                    ]))
+                });
+                target.copy_from_slice(&pixel);
+            }
+        }
+        PixelFormat::Bc1 | PixelFormat::Bc3 => {}
+    }
+}
+
+/// Expand one RGB565 value on the *plain* RGB565 path:
+/// shift-only expansion (red/blue << 3, green << 2, no
+/// bit replication). The rung 2 differential pinned
+/// this against the oracle for the plain format; the
+/// BC endpoint path keeps bit replication
+/// (`expand_565`), which rung 1 pinned on its own
+/// fixtures. The two conversions genuinely differ —
+/// at the maximum value, shift gives (248, 252, 248)
+/// where replication gives (255, 255, 255).
+fn expand_565_plain(value: u16) -> [u8; 3] {
+    let red5 = (value >> 11) & 0x1f;
+    let green6 = (value >> 5) & 0x3f;
+    let blue5 = value & 0x1f;
+    [(red5 << 3) as u8, (green6 << 2) as u8, (blue5 << 3) as u8]
+}
+
+/// Expand one 4-bit channel to 8 bits (bit replication:
+/// `n -> (n << 4) | n`).
+fn expand_4444(nibble: u16) -> u8 {
+    let nibble = nibble & 0x0f;
+    ((nibble << 4) | nibble) as u8
+}
+
+/// Widen one IEEE 754 half-precision float to f32. The
+/// widening is exact: every half value (subnormals,
+/// infinities, NaNs included) is representable in f32.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = u32::from(bits >> 15) << 31;
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let fraction = u32::from(bits & 0x03ff);
+    if exponent == 0 {
+        if fraction == 0 {
+            return f32::from_bits(sign);
+        }
+        // Subnormal half: shift the fraction until its
+        // leading bit reaches the implicit position.
+        let mut shift = 0_u32;
+        let mut significand = fraction;
+        while significand & 0x0400 == 0 {
+            significand <<= 1;
+            shift += 1;
+        }
+        significand &= 0x03ff;
+        // Value exponent is -14 - shift; the f32 field
+        // adds the 127 bias.
+        return f32::from_bits(sign | ((113 - shift) << 23) | (significand << 13));
+    }
+    if exponent == 31 {
+        // Infinity or NaN; the fraction rides along so a
+        // NaN stays a NaN through the widening.
+        return f32::from_bits(sign | (0xff << 23) | (fraction << 13));
+    }
+    // Normal: rebias the exponent (-15 half bias, +127
+    // f32 bias) and widen the fraction field.
+    f32::from_bits(sign | (((exponent + 112) as u32) << 23) | (fraction << 13))
+}
+
+/// Convert one float channel to a byte: NaN reads as 0,
+/// the value clamps to [0, 1], scales by 255, and
+/// truncates (the conversion the rung 2 differential
+/// pinned against the oracle on 144 RGBAHalf lightmaps:
+/// the rounding variant missed on essentially every
+/// non-extreme texel, the truncating variant is exact).
+fn float_to_byte(value: f32) -> u8 {
+    if value.is_nan() {
+        return 0;
+    }
+    (value.clamp(0.0, 1.0) * 255.0) as u8
 }
 
 /// Expand one RGB565 endpoint to 8-bit channels (bit
@@ -856,7 +1229,7 @@ fn decode_bc3_block(block: &[u8], out: &mut [u8; 64]) {
     }
 }
 
-/// Decode every BC1/BC3 Texture2D in the loose
+/// Decode every supported-format Texture2D in the loose
 /// SerializedFiles under a target directory (or a single
 /// .assets target) into per-level `.rgba` files plus a JSON
 /// manifest. Observe-class: default-deny, named in
@@ -1115,7 +1488,7 @@ mod tests {
         // Indices: pixel0 -> 0, pixel1 -> 1, pixel2 -> 2,
         // pixel3 -> 3, the rest -> 0.
         let block = block_with_palette_indices(0xF800, 0x001F, 0b11_10_01_00);
-        let level = decode_level(BlockFormat::Bc1, &block, 4, 4).unwrap();
+        let level = decode_level(PixelFormat::Bc1, &block, 4, 4).unwrap();
         assert_eq!(&level.rgba[0..4], &[255, 0, 0, 255]);
         assert_eq!(&level.rgba[4..8], &[0, 0, 255, 255]);
         // (2*255 + 0)/3 = 170, (2*0 + 255)/3 = 85.
@@ -1129,7 +1502,7 @@ mod tests {
         // color_0 (black, 0x0000) <= color_1 (white,
         // 0xFFFF): three colors + transparent.
         let block = block_with_palette_indices(0x0000, 0xFFFF, 0b11_10_01_00);
-        let level = decode_level(BlockFormat::Bc1, &block, 4, 4).unwrap();
+        let level = decode_level(PixelFormat::Bc1, &block, 4, 4).unwrap();
         assert_eq!(&level.rgba[0..4], &[0, 0, 0, 255]);
         assert_eq!(&level.rgba[4..8], &[255, 255, 255, 255]);
         // (0 + 255)/2 = 127 per channel (integer division).
@@ -1155,14 +1528,14 @@ mod tests {
         // Color block: solid endpoints so RGB is uniform.
         block[8..10].copy_from_slice(&0xF800_u16.to_le_bytes());
         block[10..12].copy_from_slice(&0xF800_u16.to_le_bytes());
-        let level = decode_level(BlockFormat::Bc3, &block, 4, 4).unwrap();
+        let level = decode_level(PixelFormat::Bc3, &block, 4, 4).unwrap();
         let alphas: Vec<u8> = (0..8).map(|i| level.rgba[i * 4 + 3]).collect();
         assert_eq!(alphas, vec![255, 0, 218, 182, 145, 109, 72, 36]);
         // Reversed endpoints (0 <= 255): four interpolated
         // values plus the 0 / 255 pair at indices 6 / 7.
         block[0] = 0;
         block[1] = 255;
-        let level = decode_level(BlockFormat::Bc3, &block, 4, 4).unwrap();
+        let level = decode_level(PixelFormat::Bc3, &block, 4, 4).unwrap();
         let alphas: Vec<u8> = (0..8).map(|i| level.rgba[i * 4 + 3]).collect();
         assert_eq!(alphas, vec![0, 255, 51, 102, 153, 204, 0, 255]);
     }
@@ -1178,7 +1551,7 @@ mod tests {
         block[10..12].copy_from_slice(&0xFFFF_u16.to_le_bytes());
         // Pixel 0 uses index 3 -> (0 + 2*255)/3 = 170.
         block[12..16].copy_from_slice(&0b11_u32.to_le_bytes());
-        let level = decode_level(BlockFormat::Bc3, &block, 4, 4).unwrap();
+        let level = decode_level(PixelFormat::Bc3, &block, 4, 4).unwrap();
         assert_eq!(&level.rgba[0..4], &[170, 170, 170, 255]);
     }
 
@@ -1190,7 +1563,7 @@ mod tests {
         let mut data = Vec::new();
         data.extend_from_slice(&block);
         data.extend_from_slice(&block);
-        let level = decode_level(BlockFormat::Bc1, &data, 5, 3).unwrap();
+        let level = decode_level(PixelFormat::Bc1, &data, 5, 3).unwrap();
         assert_eq!(level.rgba.len(), 5 * 3 * 4);
         assert!(
             level
@@ -1205,9 +1578,9 @@ mod tests {
     #[test]
     fn validation_mip_chain_sizes_and_levels() {
         // 8x8 DXT1, 4 levels: 32 + 8 + 8 + 8 = 56 bytes.
-        assert_eq!(expected_image_size(BlockFormat::Bc1, 8, 8, 4), 56);
+        assert_eq!(expected_image_size(PixelFormat::Bc1, 8, 8, 4), 56);
         let data = vec![0_u8; 56];
-        let levels = decode_mip_chain(BlockFormat::Bc1, &data, 8, 8, 4).unwrap();
+        let levels = decode_mip_chain(PixelFormat::Bc1, &data, 8, 8, 4).unwrap();
         assert_eq!(levels.len(), 4);
         assert_eq!((levels[3].width, levels[3].height), (1, 1));
     }
@@ -1264,9 +1637,9 @@ mod tests {
         out.extend_from_slice(&[0_u8; 2]);
         assert_eq!(out.len(), 12);
         out.extend_from_slice(&vec![0_u8; layout.prefix_skip_bytes()]);
-        let block_format = BlockFormat::from_format_code(format).unwrap();
+        let pixel_format = PixelFormat::from_format_code(format).unwrap();
         let complete =
-            expected_image_size(block_format, width as u32, height as u32, mip_count as u32) as i32;
+            expected_image_size(pixel_format, width as u32, height as u32, mip_count as u32) as i32;
         out.extend_from_slice(&width.to_le_bytes());
         out.extend_from_slice(&height.to_le_bytes());
         out.extend_from_slice(&complete.to_le_bytes());
@@ -1333,20 +1706,169 @@ mod tests {
         }
     }
 
+    // ---- validation: the rung 2 uncompressed family ----
+
+    #[test]
+    fn validation_rgba32_identity_and_argb32_swizzle() {
+        // Two pixels whose channel values are all distinct,
+        // so any byte-order error shows.
+        let level =
+            decode_level(PixelFormat::Rgba32, &[10, 20, 30, 40, 50, 60, 70, 80], 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![10, 20, 30, 40, 50, 60, 70, 80]);
+        // ARGB32 stores A first: [40, 10, 20, 30] decodes to
+        // R=10, G=20, B=30, A=40.
+        let level =
+            decode_level(PixelFormat::Argb32, &[40, 10, 20, 30, 80, 50, 60, 70], 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![10, 20, 30, 40, 50, 60, 70, 80]);
+    }
+
+    #[test]
+    fn validation_rgb24_alpha_fill() {
+        let level = decode_level(PixelFormat::Rgb24, &[1, 2, 3, 4, 5, 6], 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![1, 2, 3, 255, 4, 5, 6, 255]);
+    }
+
+    #[test]
+    fn validation_alpha8_and_r8_channel_conventions() {
+        // Alpha8: black under the recorded alpha (the
+        // convention the rung 2 differential pinned on
+        // 323 real textures).
+        let level = decode_level(PixelFormat::Alpha8, &[7, 200], 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![0, 0, 0, 7, 0, 0, 0, 200]);
+        // R8: the value rides in red; green/blue are 0.
+        let level = decode_level(PixelFormat::R8, &[7, 200], 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![7, 0, 0, 255, 200, 0, 0, 255]);
+    }
+
+    #[test]
+    fn validation_rgb565_expansion() {
+        // The plain-format expansion is shift-only (the
+        // rung 2 differential pin): pure red 0xF800 ->
+        // 31<<3 = 248, pure green 0x07E0 -> 63<<2 = 252,
+        // and the mid value 0x8410 (R5=16, G6=32, B5=16)
+        // -> (128, 128, 128).
+        let mut data = Vec::new();
+        for value in [0xF800_u16, 0x07E0, 0x8410] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let level = decode_level(PixelFormat::Rgb565, &data, 3, 1).unwrap();
+        assert_eq!(
+            level.rgba,
+            vec![248, 0, 0, 255, 0, 252, 0, 255, 128, 128, 128, 255]
+        );
+    }
+
+    #[test]
+    fn validation_4444_nibble_orders() {
+        // Nibble expansion is bit replication: 0x1 -> 0x11
+        // (17), 0x2 -> 0x22 (34), 0x3 -> 0x33 (51),
+        // 0xF -> 0xFF (255).
+        // ARGB4444 0xF123: A=F, R=1, G=2, B=3.
+        let level = decode_level(PixelFormat::Argb4444, &0xF123_u16.to_le_bytes(), 1, 1).unwrap();
+        assert_eq!(level.rgba, vec![17, 34, 51, 255]);
+        // RGBA4444 0x123F: R=1, G=2, B=3, A=F.
+        let level = decode_level(PixelFormat::Rgba4444, &0x123F_u16.to_le_bytes(), 1, 1).unwrap();
+        assert_eq!(level.rgba, vec![17, 34, 51, 255]);
+        // The two orders disagree on a value like 0x1234:
+        // ARGB reads A=1,R=2,G=3,B=4; RGBA reads R=1,G=2,
+        // B=3,A=4 (0x4 -> 0x44 = 68).
+        let argb = decode_level(PixelFormat::Argb4444, &0x1234_u16.to_le_bytes(), 1, 1).unwrap();
+        let rgba = decode_level(PixelFormat::Rgba4444, &0x1234_u16.to_le_bytes(), 1, 1).unwrap();
+        assert_eq!(argb.rgba, vec![34, 51, 68, 17]);
+        assert_eq!(rgba.rgba, vec![17, 34, 51, 68]);
+    }
+
+    #[test]
+    fn validation_float_channel_conversion() {
+        // RGBAHalf pixel: R=1.0 (0x3C00), G=0.5 (0x3800),
+        // B=0.0, A=1.0. 0.5 * 255 = 127.5 truncates to
+        // 127 (the rung 2 differential pin).
+        let mut data = Vec::new();
+        for half in [0x3C00_u16, 0x3800, 0x0000, 0x3C00] {
+            data.extend_from_slice(&half.to_le_bytes());
+        }
+        let level = decode_level(PixelFormat::RgbaHalf, &data, 1, 1).unwrap();
+        assert_eq!(level.rgba, vec![255, 127, 0, 255]);
+        // RFloat clamps out-of-range values: 2.5 -> 255,
+        // -1.0 -> 0.
+        let mut data = Vec::new();
+        data.extend_from_slice(&2.5_f32.to_le_bytes());
+        data.extend_from_slice(&(-1.0_f32).to_le_bytes());
+        let level = decode_level(PixelFormat::RFloat, &data, 2, 1).unwrap();
+        assert_eq!(level.rgba, vec![255, 0, 0, 255, 0, 0, 0, 255]);
+        // RGBAFloat under the truncation rule: 0.25*255
+        // = 63.75 -> 63, 0.5*255 = 127.5 -> 127,
+        // 0.75*255 = 191.25 -> 191.
+        let mut data = Vec::new();
+        for value in [0.25_f32, 0.5, 0.75, 1.0] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let level = decode_level(PixelFormat::RgbaFloat, &data, 1, 1).unwrap();
+        assert_eq!(level.rgba, vec![63, 127, 191, 255]);
+    }
+
+    #[test]
+    fn validation_half_widening_exact_values() {
+        assert_eq!(half_to_f32(0x3C00), 1.0);
+        assert_eq!(half_to_f32(0x3800), 0.5);
+        assert_eq!(half_to_f32(0xC000), -2.0);
+        assert_eq!(half_to_f32(0x0000), 0.0);
+        assert_eq!(half_to_f32(0x7C00), f32::INFINITY);
+        // Largest subnormal half: (1023/1024) * 2^-14.
+        assert_eq!(half_to_f32(0x03FF), 1023.0 / 1024.0 * 2.0_f32.powi(-14));
+        // Smallest subnormal half: 2^-24.
+        assert_eq!(half_to_f32(0x0001), 2.0_f32.powi(-24));
+        assert!(half_to_f32(0x7E00).is_nan());
+    }
+
+    #[test]
+    fn validation_plain_mip_chain_sizes() {
+        // RGBA32 8x8, 4 levels: 256 + 64 + 16 + 4 = 340.
+        assert_eq!(expected_image_size(PixelFormat::Rgba32, 8, 8, 4), 340);
+        // RGB565 5x3, 2 levels: 30 + (2*1*2) = 34 (odd
+        // dimensions halve by the shared level rule).
+        assert_eq!(expected_image_size(PixelFormat::Rgb565, 5, 3, 2), 34);
+        let data = vec![0_u8; 340];
+        let levels = decode_mip_chain(PixelFormat::Rgba32, &data, 8, 8, 4).unwrap();
+        assert_eq!(levels.len(), 4);
+        assert_eq!(levels[3].rgba.len(), 4);
+    }
+
+    #[test]
+    fn validation_parse_plain_format_objects() {
+        // RGBA32 inline under the modern layout; the
+        // parse-time size identity now covers plain
+        // formats too.
+        let image = vec![9_u8; 8 * 8 * 4];
+        let payload = synthetic_object(TextureLayout::Modern, 4, 8, 8, 1, &image, false);
+        let object = parse_texture2d_object(&payload, true, TextureLayout::Modern).unwrap();
+        assert_eq!(object.format_code, 4);
+        let levels = object.decode_rgba(None).unwrap();
+        assert_eq!(levels[0].rgba.len(), 256);
+        // RGB565 streamed under legacy8.
+        let image = vec![0_u8; 8 * 8 * 2];
+        let payload = synthetic_object(TextureLayout::Legacy8, 7, 8, 8, 1, &[], true);
+        let object = parse_texture2d_object(&payload, true, TextureLayout::Legacy8).unwrap();
+        let mut resource = vec![0_u8; 64];
+        resource.extend_from_slice(&image);
+        let levels = object.decode_rgba(Some(&resource)).unwrap();
+        assert_eq!(levels[0].rgba.len(), 256);
+    }
+
     // ---- adversarial: typed errors, never panics ----
 
     #[test]
     fn adversarial_truncated_block_data() {
         assert!(matches!(
-            decode_level(BlockFormat::Bc1, &[0_u8; 7], 4, 4),
+            decode_level(PixelFormat::Bc1, &[0_u8; 7], 4, 4),
             Err(TextureError::ImageSizeMismatch { .. })
         ));
         assert!(matches!(
-            decode_level(BlockFormat::Bc3, &[0_u8; 15], 4, 4),
+            decode_level(PixelFormat::Bc3, &[0_u8; 15], 4, 4),
             Err(TextureError::ImageSizeMismatch { .. })
         ));
         assert!(matches!(
-            decode_level(BlockFormat::Bc1, &[0_u8; 9], 4, 4),
+            decode_level(PixelFormat::Bc1, &[0_u8; 9], 4, 4),
             Err(TextureError::ImageSizeMismatch { .. })
         ));
     }
@@ -1354,13 +1876,87 @@ mod tests {
     #[test]
     fn adversarial_format_and_dimension_mismatch() {
         // BC1-sized buffer offered as BC3.
-        assert!(decode_level(BlockFormat::Bc3, &[0_u8; 8], 4, 4).is_err());
+        assert!(decode_level(PixelFormat::Bc3, &[0_u8; 8], 4, 4).is_err());
         assert!(matches!(
-            decode_level(BlockFormat::Bc1, &[0_u8; 64], 0, 4),
+            decode_level(PixelFormat::Bc1, &[0_u8; 64], 0, 4),
             Err(TextureError::ImageSizeMismatch { .. })
         ));
-        assert!(BlockFormat::from_format_code(28).is_err()); // DXT1Crunched
-        assert!(BlockFormat::from_format_code(4).is_err()); // RGBA32: later rung
+        assert!(PixelFormat::from_format_code(28).is_err()); // DXT1Crunched
+        assert!(PixelFormat::from_format_code(25).is_err()); // BC7: later rung
+        assert!(PixelFormat::from_format_code(47).is_err()); // ETC2_RGBA8: later rung
+    }
+
+    #[test]
+    fn adversarial_plain_format_wrong_lengths() {
+        // Every uncompressed format rejects a level buffer
+        // one byte short and one byte long: the size
+        // arithmetic is exact, never padded or truncated.
+        for format in [
+            PixelFormat::Alpha8,
+            PixelFormat::Argb4444,
+            PixelFormat::Rgb24,
+            PixelFormat::Rgba32,
+            PixelFormat::Argb32,
+            PixelFormat::Rgb565,
+            PixelFormat::Rgba4444,
+            PixelFormat::RgbaHalf,
+            PixelFormat::RFloat,
+            PixelFormat::RgbaFloat,
+            PixelFormat::R8,
+        ] {
+            let exact = level_byte_size(format, 4, 4) as usize;
+            assert!(matches!(
+                decode_level(format, &vec![0_u8; exact - 1], 4, 4),
+                Err(TextureError::ImageSizeMismatch { .. })
+            ));
+            assert!(matches!(
+                decode_level(format, &vec![0_u8; exact + 1], 4, 4),
+                Err(TextureError::ImageSizeMismatch { .. })
+            ));
+            // A chain one byte short fails the same way.
+            assert!(decode_mip_chain(format, &vec![0_u8; exact - 1], 4, 4, 1).is_err());
+        }
+    }
+
+    #[test]
+    fn adversarial_plain_object_size_lie() {
+        // A recorded complete image size that disagrees
+        // with the format arithmetic is a typed mismatch
+        // for plain formats now (rung 1 checked BC only).
+        let image = vec![0_u8; 8 * 8 * 4];
+        let mut payload = synthetic_object(TextureLayout::Modern, 4, 8, 8, 1, &image, false);
+        // Complete-size field offset: name(12) + prefix(8)
+        // + width(4) + height(4) under the modern layout.
+        let size_offset = 12 + 8 + 8;
+        payload[size_offset..size_offset + 4].copy_from_slice(&999_i32.to_le_bytes());
+        assert!(matches!(
+            parse_texture2d_object(&payload, true, TextureLayout::Modern),
+            Err(TextureError::ImageSizeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn adversarial_float_specials_never_panic() {
+        // NaN, infinities, and negative floats decode to
+        // defined bytes (NaN -> 0, +inf -> 255, -inf -> 0)
+        // rather than panicking or saturating arbitrarily.
+        let mut data = Vec::new();
+        for value in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.5] {
+            data.extend_from_slice(&value.to_le_bytes());
+        }
+        let level = decode_level(PixelFormat::RFloat, &data, 4, 1).unwrap();
+        let reds: Vec<u8> = (0..4).map(|i| level.rgba[i * 4]).collect();
+        assert_eq!(reds, vec![0, 255, 0, 0]);
+        // Half NaN (0x7E00), +infinity (0x7C00),
+        // -infinity (0xFC00), and zero as the four
+        // channels of one RGBAHalf pixel ride the same
+        // rule.
+        let mut data = Vec::new();
+        for half in [0x7E00_u16, 0x7C00, 0xFC00, 0x0000] {
+            data.extend_from_slice(&half.to_le_bytes());
+        }
+        let level = decode_level(PixelFormat::RgbaHalf, &data, 1, 1).unwrap();
+        assert_eq!(level.rgba, vec![0, 255, 0, 0]);
     }
 
     #[test]
@@ -1414,7 +2010,7 @@ mod corpus_tests {
     use super::*;
     use std::path::PathBuf;
 
-    /// The differential harness (D-1654 rung 1): every
+    /// The differential harness (D-1654 rungs 1-2): every
     /// fixture in `tests/fixtures/texture_codec/` is a real
     /// Texture2D extracted from a held title (provenance in
     /// the manifest), decoded by this codec and compared
@@ -1422,7 +2018,17 @@ mod corpus_tests {
     /// RGBA buffer under the pinned orientation convention:
     /// the oracle equals the codec's base level flipped
     /// vertically (Unity's stored row 0 is the bottom row).
-    /// The bar is bit-exact on every fixture.
+    /// The bar is bit-exact on every fixture. Rung 2's
+    /// channel conventions were pinned by its scratch
+    /// differential (1,381 textures, zero mismatches)
+    /// before these fixtures were selected: Alpha8 is
+    /// black under the alpha, plain RGB565 expands
+    /// shift-only (the BC endpoints keep bit replication),
+    /// and float channels convert by truncation. The two
+    /// RFloat fixtures are also the unity6 layout's first
+    /// differential validation. R8 has no fixture: its
+    /// only census carriers are bundle-resident or in a
+    /// title whose walk was not completed (rung record).
     fn fixtures_dir() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests")
@@ -1456,7 +2062,7 @@ mod corpus_tests {
         for fixture in fixtures {
             let id = fixture["id"].as_str().unwrap();
             let format =
-                BlockFormat::from_format_code(fixture["format"].as_i64().unwrap() as i32).unwrap();
+                PixelFormat::from_format_code(fixture["format"].as_i64().unwrap() as i32).unwrap();
             let width = fixture["width"].as_u64().unwrap() as u32;
             let height = fixture["height"].as_u64().unwrap() as u32;
             let mip_count = fixture["mip_count"].as_u64().unwrap() as u32;
@@ -1492,5 +2098,20 @@ mod corpus_tests {
             "DXT5 fixtures: {}",
             per_format["DXT5"]
         );
+        // Rung 2 floors, at the committed counts.
+        for (name, floor) in [
+            ("RGBA32", 8),
+            ("ARGB32", 6),
+            ("RGB24", 6),
+            ("Alpha8", 6),
+            ("ARGB4444", 2),
+            ("RGB565", 6),
+            ("RGBAHalf", 1),
+            ("RGBAFloat", 2),
+            ("RFloat", 2),
+        ] {
+            let count = per_format.get(name).copied().unwrap_or(0);
+            assert!(count >= floor, "{name} fixtures: {count} < {floor}");
+        }
     }
 }
