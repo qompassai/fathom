@@ -99,7 +99,10 @@ mod tests {
         // 194 at the D-1620 aotopsy lane, 2026-11-16: +1;
         // 195 at the D-1620 jadart lane, 2026-11-16: +1;
         // 196 at the D-1650 IoStore landing, 2026-11-16: +1 from
-        // the IoStore rung (D-1638), extract_iostore_chunks).
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 196);
+        // the IoStore rung (D-1638), extract_iostore_chunks;
+        // 197 at the D-1664 texture-codec rung 1 landing,
+        // 2026-11-16: +1 from the texture-codec rung (D-1654),
+        // decode_unity_textures).
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 197);
     }
 }
