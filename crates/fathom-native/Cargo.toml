@@ -7,6 +7,7 @@ rust-version.workspace = true
 description = "fathom native-binary provider: Ghidra headless analysis, artifact and layout inspection"
 
 [dependencies]
+blake3.workspace = true
 fathom-core = { version = "1.0.0", path = "../fathom-core" }
 base64.workspace = true
 fathom-managed = { version = "1.0.0", path = "../fathom-managed" }
