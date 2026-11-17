@@ -892,6 +892,7 @@ mod tests {
                 blender_program: None,
                 ghidra_headless: None,
                 http_bind: "127.0.0.1:8731".parse().unwrap(),
+                ooz_decoder: None,
                 signing_key_file: None,
                 state_dir: self.state_dir.clone(),
                 target_roots: vec![self.root.canonicalize().unwrap()],

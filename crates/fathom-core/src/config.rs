@@ -27,6 +27,11 @@ pub struct ConfigFile {
     pub ghidra_headless: Option<PathBuf>,
     /// Bind address for the HTTP transports.
     pub http_bind: Option<String>,
+    /// Explicit path to the pinned `ooz` Oodle decoder the
+    /// IoStore rung drives for Oodle-compressed chunks.
+    /// Absent means Oodle chunks are unavailable, never
+    /// faked.
+    pub ooz_decoder: Option<PathBuf>,
     /// Per-provider configuration blocks (SPEC §8 pattern:
     /// a provider exists for a build only when the operator
     /// configures it).
@@ -208,6 +213,7 @@ pub struct Config {
     pub blender_program: Option<PathBuf>,
     pub ghidra_headless: Option<PathBuf>,
     pub http_bind: SocketAddr,
+    pub ooz_decoder: Option<PathBuf>,
     pub signing_key_file: Option<PathBuf>,
     pub state_dir: PathBuf,
     pub target_roots: Vec<PathBuf>,
@@ -294,6 +300,7 @@ impl Config {
             blender_program,
             ghidra_headless: form.ghidra_headless,
             http_bind,
+            ooz_decoder: form.ooz_decoder,
             signing_key_file: form.signing_key_file,
             state_dir,
             target_roots,
@@ -336,6 +343,7 @@ impl Config {
             blender_program: None,
             ghidra_headless: None,
             http_bind: DEFAULT_HTTP_BIND.parse().expect("constant binds"),
+            ooz_decoder: None,
             signing_key_file: None,
             state_dir: default_state_dir(),
             target_roots: Vec::new(),

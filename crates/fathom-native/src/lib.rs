@@ -880,6 +880,28 @@ pub fn register(registry: &mut Registry) {
     );
     registry.register(
         descriptor(
+            "extract_iostore_chunks",
+            ToolClass::Observe,
+            "unreal",
+            "Extract chunk payloads from one Unreal IoStore container \
+             (TOC version 8; the .utoc target's paired .ucas) into an \
+             output directory under a target root, with a manifest: \
+             every chunk is BLAKE3-verified against its TOC meta hash \
+             before it is written; stored, Zlib, Gzip, and LZ4 blocks \
+             decode natively; Oodle blocks decode through the \
+             operator-configured ooz decoder (ooz_decoder) and are \
+             recorded decoder_unavailable without one; encrypted \
+             containers are recorded, never decrypted. chunk_ids \
+             optionally restricts the run to the named chunks",
+            target_and(
+                json!({"chunk_ids": {"type": "array", "items": {"type": "string"}, "description": "Optional chunk ids (24 hex digits) to extract; absent extracts every chunk"}, "output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(iostore::extract_iostore_chunks),
+    );
+    registry.register(
+        descriptor(
             "extract_renpy_archive",
             ToolClass::Observe,
             "renpy",
@@ -1494,10 +1516,13 @@ pub fn register(registry: &mut Registry) {
             "inspect_iostore_container",
             ToolClass::Read,
             "unreal",
-            "Census one Unreal IoStore container header (.utoc): version, \
-             compression block size, directory index size, partition count, \
-             and the paired .ucas size. The chunk entry table, the directory \
-             index body, and chunk extraction are named gaps, never guessed",
+            "Census one Unreal IoStore container (.utoc): the header \
+             facts for any TOC version, and for version 8 the full chunk \
+             directory — chunk and block counts, the compression method \
+             table, per-type chunk counts, the directory index mount \
+             point, and the retained chunk list export. The directory \
+             index entries and the hash-lookup table are recorded, not \
+             interpreted",
             target_schema(),
         ),
         Arc::new(iostore::inspect_iostore_container),
