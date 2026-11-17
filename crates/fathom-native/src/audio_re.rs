@@ -117,7 +117,7 @@ fn read_at(file: &mut File, offset: u64, count: usize) -> Result<Vec<u8>> {
 
 /// Write `bytes` to `destination` atomically; returns
 /// the payload SHA-256 (the GameMaker lane's pattern).
-fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<String> {
+pub(crate) fn write_atomic(destination: &Path, bytes: &[u8]) -> Result<String> {
     let temp = destination.with_extension("partial");
     {
         let mut file = File::create(&temp)
@@ -1654,8 +1654,9 @@ const MV_FAKE_HEADER_LEN: usize = 16;
 
 /// Decrypt one MV-encrypted payload: drop the fake
 /// header, XOR the first 16 body bytes with the key,
-/// copy the rest verbatim.
-fn mv_decrypt(bytes: &[u8], key: &[u8; 16]) -> Option<Vec<u8>> {
+/// copy the rest verbatim. Shared with the MV/MZ image
+/// lane in `mvmz` (one decrypt core for the format).
+pub(crate) fn mv_decrypt(bytes: &[u8], key: &[u8; 16]) -> Option<Vec<u8>> {
     if bytes.len() < MV_FAKE_HEADER_LEN || &bytes[0..5] != b"RPGMV" {
         return None;
     }
@@ -1667,7 +1668,7 @@ fn mv_decrypt(bytes: &[u8], key: &[u8; 16]) -> Option<Vec<u8>> {
 }
 
 /// Decode a 32-hex-character MV encryption key.
-fn mv_key_from_hex(text: &str) -> Option<[u8; 16]> {
+pub(crate) fn mv_key_from_hex(text: &str) -> Option<[u8; 16]> {
     if text.len() != 32 {
         return None;
     }

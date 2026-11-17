@@ -31,6 +31,7 @@ pub mod keyhunt;
 pub mod kirikiri;
 pub mod layout;
 pub mod mesh;
+pub mod mvmz;
 pub mod python;
 pub mod renpy;
 pub mod resources;
@@ -967,6 +968,24 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(audio_re::extract_rpgmaker_mv_audio),
+    );
+    registry.register(
+        descriptor(
+            "extract_rpgmaker_mv_images",
+            ToolClass::Observe,
+            "rpgmaker",
+            "Decrypt and extract a RPG Maker MV/MZ game's encrypted images \
+             (.rpgmvp) from its game tree into an output directory under a \
+             target root, using the encryptionKey in data/System.json (the \
+             key itself is never recorded), with a manifest whose rows \
+             verify the decrypted PNG signature and IHDR; payloads that \
+             fail verification are recorded, never written",
+            target_and(
+                json!({"output_dir": {"type": "string", "description": "Output directory under a configured target root"}}),
+                &["output_dir"],
+            ),
+        ),
+        Arc::new(mvmz::extract_rpgmaker_mv_images),
     );
     registry.register(
         descriptor(

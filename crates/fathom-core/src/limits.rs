@@ -213,6 +213,11 @@ pub const MV_FILE_BYTES_MAX: u64 = 268_435_456;
 /// Encrypted audio files in one RPG Maker MV tree.
 pub const MV_FILES_MAX: usize = 100_000;
 
+/// Largest System.json the RPG Maker MV/MZ media lanes
+/// will read whole (the encryption flags and the key
+/// live there; the key is consumed in memory only).
+pub const MV_SYSTEM_JSON_BYTES_MAX: u64 = 16_777_216;
+
 /// Wall-clock bound for one external `vgmstream-cli`
 /// decode, seconds.
 pub const VGMSTREAM_TIMEOUT_SECS: u64 = 120;
