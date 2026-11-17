@@ -98,6 +98,12 @@ pub const GAME_WALK_FILES_MAX: usize = 200_000;
 /// Total bytes one game-archive extraction may write.
 pub const GAME_EXTRACT_BYTES_MAX: u64 = 4_294_967_296;
 
+/// Bound on a `.utoc` file read into memory for the IoStore
+/// chunk parse: a TOC carries ~114 bytes per chunk across
+/// its sections, so this bound still admits millions of
+/// chunks while keeping the parse a bounded memory event.
+pub const IOSTORE_TOC_BYTES_MAX: u64 = 1_073_741_824;
+
 /// Largest pak target the Unreal reader will open. The
 /// pak reader streams bounded ranges (footer, SHA-1-
 /// verified index, per-entry spans) and never
