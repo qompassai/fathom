@@ -8,7 +8,7 @@ This is one product's slice of the combined six-product submission worksheet pre
 
 - Requestor (3): Matt A. Porter — Field Service Technician (FST), matthew.porter@tdstelecom.com
 - Requestor's Manager (4): Josh Barter
-- PAT Manager (5): [INPUT NEEDED: PAT Manager name — note: the process document names an Internal Employee Tools PAT contact as the AIR-access contact; that is not evidence he is the PAT Manager for this request]
+- PAT Manager (5):
 - CoE Director (6): [INPUT NEEDED: CoE Director for the accountable Agile team — if left blank, the TRIS Administrator determines the accountable team, AM, and AD per the process document]
 
 ## Shared vendor fields (rows 10, 11, 42, plus the shared open-source fact at row 46)
@@ -25,7 +25,7 @@ Applies to the five Qompass AI products. The Salesforce integration's vendor is 
 - Technology Name (8): Fathom
 - Technology Version (9): 1.0.0 (release dated 2026-10-29)
 - Website (11): qompass.ai — product page: https://qompass.ai/solutions/mcp/fathom/
-- Description (14): A clean-room reverse-engineering capability delivered as an MCP server: analysts point it at a binary, application package, or capture and receive structured, evidence-labelled findings — what was observed, what was derived, what was not examined, and what the provider cannot establish. Rust workspace (policy/evidence engine, Ghidra headless provider, native/JS/.NET/process-observation providers), built on a deterministic, fail-closed policy engine.
+- Description (14): A clean-room reverse-engineering capability delivered as an MCP server: analysts point it at a binary, application package, or capture and receive structured, evidence-labelled findings — what was observed, what was derived, what was not examined, and what the provider cannot establish. Rust workspace (policy/evidence engine, Ghidra headless provider, native/JS/.NET/process-observation providers, and native readers for Flutter/Dart AOT, Unreal IoStore packages, texture formats, and RPG Maker MV/MZ), built on a deterministic, fail-closed policy engine.
 - How used at TDS (15): Defensive reverse engineering by security engineering / technical staff: vendor-software assurance, firmware and field-tooling analysis, malware triage support, incident response.
 - Who will use it (16): Developers and security engineering staff (analysts) — a small, named user group. Not field services at large, not end customers.
 - Technology replaced/removed (17): Nothing approved is removed. It replaces ad-hoc, unrecorded analysis (individual tool installs, personal scripts) with one governed, evidence-producing capability.
