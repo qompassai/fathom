@@ -11,8 +11,8 @@ This folder holds the TDS TRIS (Technology Request Information Sheet) submission
 
 ## Status
 
-- Checklist: **39 completed · 11 pending** (requestor lines, including the one requested-scope confirmation; the reviewer fields, form rows 66–91, are IT's and are listed separately in the checklist).
-- The pending lines are the inputs only the requestor can supply — manager/PAT Manager/CoE Director names, the requested-scope confirmation (local/stdio-only deployment, Ghidra provider scope, approved artifact classes, no telemetry), the AI-component wording, production-use wording, the alternatives and similar-technology statements, artifact-handling conditions, and the shared vendor items. See [CHECKLIST.md](CHECKLIST.md) for the exact list.
+- Checklist: **41 completed · 9 pending** (requestor lines, including the one requested-scope confirmation; the reviewer fields, form rows 66–91, are IT's and are listed separately in the checklist).
+- The pending lines are the inputs only the requestor can supply — the CoE Director name, the requested-scope confirmation (local/stdio-only deployment, Ghidra provider scope, approved artifact classes, no telemetry), the AI-component wording, production-use wording, the alternatives and similar-technology statements, artifact-handling conditions, and the shared vendor items. (Row 4, Requestor's Manager, is filled; row 5, PAT Manager, is left blank deliberately under the Administrator-deferral.) See [CHECKLIST.md](CHECKLIST.md) for the exact list.
 - A security risk assessment is **required and requested** for this product (checklist row 35) — Fathom is a dual-use analysis capability, and the submission is written to make that assessment easy.
 - Submission status: **DRAFT — prepared, not yet submitted.** After TRIS approval, a Procurement Engagement Request (PER) follows.
 
