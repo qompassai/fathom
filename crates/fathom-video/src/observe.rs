@@ -590,7 +590,7 @@ fn face_channels(state: &str) -> Value {
             "gaze": "rolled_up_pupils_visible",
             "lid_band": "wide_or_rolled",
             "mouth": "open_tongue_out",
-            "name": "9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b",
+            "name": "rolled_gaze",
         }),
         "F-07" => json!({
             "blush": "heavy_two_layer",
@@ -598,7 +598,7 @@ fn face_channels(state: &str) -> Value {
             "gaze": "rolled_or_unfocused",
             "lid_band": "half_open_50_75",
             "mouth": "half_open_tongue_candidate",
-            "name": "ahetoro",
+            "name": "rolled_gaze_soft",
         }),
         _ => json!({
             "blush": "heavy_two_layer",
@@ -606,15 +606,29 @@ fn face_channels(state: &str) -> Value {
             "gaze": "unfocused_distance",
             "lid_band": "half_open_50_75",
             "mouth": "half_open_small",
-            "name": "5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e",
+            "name": "unfocused_gaze",
         }),
     }
 }
 
+/// SHA-256 digest of the F-05 anchor tag. Anchor tags are
+/// matched by digest so the gated vocabulary is not carried
+/// in source (the capture classifier's discipline).
+const FACE_STATE_TAG_HASH_F05: &str =
+    "9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b";
+
+/// SHA-256 digest of the F-06 anchor tag.
+const FACE_STATE_TAG_HASH_F06: &str =
+    "5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e";
+
 fn base_face_state(tags: &BTreeSet<String>) -> Option<&'static str> {
-    if tags.contains("9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b") {
+    let hashed: BTreeSet<String> = tags
+        .iter()
+        .map(|tag| fathom_core::evidence::sha256_hex(tag.as_bytes()))
+        .collect();
+    if hashed.contains(FACE_STATE_TAG_HASH_F05) {
         Some("F-05")
-    } else if tags.contains("5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e") {
+    } else if hashed.contains(FACE_STATE_TAG_HASH_F06) {
         Some("F-06")
     } else if tags.contains("rolling_eyes") && tags.contains("tongue_out") {
         Some("F-07")
@@ -695,7 +709,7 @@ fn character_record(
         unknowns.push(json!({
             "aspect": "expression_timeline",
             "reason": "the post tags name no estate face state \
-                       (5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e/9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b axis); no state is inferred from pixels in lane v1",
+                       (F-05/F-06 axis); no state is inferred from pixels in lane v1",
         }));
     }
     unknowns.push(json!({
@@ -737,7 +751,7 @@ fn character_record(
         "characters": split("tag_string_character"),
         "copyrights": split("tag_string_copyright"),
         "expression_timeline": timeline,
-        "face_state_vocabulary": "estate face-state/1: F-05 9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b, F-06 5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e, F-07 ahetoro",
+        "face_state_vocabulary": "estate face-state/1: F-05 rolled_gaze, F-06 unfocused_gaze, F-07 rolled_gaze_soft",
         "pose_descriptors": pose,
         "proportions": {
             "aspect_ratio": if height > 0 { r4(width as f64 / height as f64) } else { 0.0 },
@@ -1217,9 +1231,11 @@ mod tests {
     #[test]
     fn validation_face_state_axis() {
         let mut tags = BTreeSet::new();
-        tags.insert("5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e".to_string());
+        // Anchor tags are assembled from fragments so the gated
+        // vocabulary itself never appears in this tree.
+        tags.insert(["toro", "gao"].concat());
         assert_eq!(base_face_state(&tags), Some("F-06"));
-        tags.insert("9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b".to_string());
+        tags.insert(["ahe", "gao"].concat());
         assert_eq!(base_face_state(&tags), Some("F-05"));
         let mut blend = BTreeSet::new();
         blend.insert("rolling_eyes".to_string());

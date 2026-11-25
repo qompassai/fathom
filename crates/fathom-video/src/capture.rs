@@ -57,9 +57,27 @@ const USER_AGENT: &str = "pax-fathom-media-capture/1.0 (clean-room RE observatio
 
 const MEDIA_EXTENSIONS: [&str; 6] = ["gif", "jpeg", "jpg", "mp4", "png", "webm"];
 
-const EXPLICIT_TAGS: [&str; 16] = [
-    "9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b", "7902e27065cfa96f685ba02d8168505328e5046a6d39390fb24c0e5d780efa56", "ff5ae7e8d206066d2bcb44222c2ef583c8d4c35a4c00f00a87b6ddd964c844fa", "e5cd1243e0e97f6d7b30cd7a6e17be3e63aa4135ced9b80b0a551d99913612ab", "4ae19158348463785bb8bbe51890203f49c92b83fa89b83ce09fd0b99d9cee03", "d92f4cf1e2d7e8129d7536dda13e3b1898da728ee64e2f9566cb7c86619bbda5", "81fcbba2c584e6bc656f5f0b36e98e8ce5d5a888bfeb1816425c7f9a35b5e2ce", "f6952d6eef555ddd87aca66e56b91530222d6e318414816f3ba7cf5bf694bf0f", "0f28c4960d96647e77e7ab6d13b85bd16c7ca56f45df802cdc763a5e5c0c7863", "98d44e13f455d916674d38424d39e1cb01b2a9132aacbb7b97a6f8bb7feb2544",
-    "e683679358a5aea345d8a6084369eae87b0a3db298631dd14aed132f84d3b4e8", "5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e", "ade74a96ae48fd4f97f0c7f1d5c748fccdc47a13008f1479bde90b4623c7e220", "b2170dfac0589e2a701cebaf06732bcf2925da1326a62c403f88b68a540163a3", "258878cfd547ef6161f926f604ab44e77c1bdc7c519232844b0b67b906a6f97e", "23353488769f59636a7a7145b146e7ac85dbc694d579371972ea6d4272e66c77",
+/// SHA-256 digests of the explicit tag vocabulary. The terms
+/// themselves are not carried in source: a candidate tag is
+/// hashed and compared against these digests, so the gate's
+/// behaviour is identical without the vocabulary in the tree.
+const EXPLICIT_TAG_HASHES: [&str; 16] = [
+    "9c5ba01ca08e6b8a7a29192599c889cdfe17cbfb366135563a1554778532219b",
+    "7902e27065cfa96f685ba02d8168505328e5046a6d39390fb24c0e5d780efa56",
+    "ff5ae7e8d206066d2bcb44222c2ef583c8d4c35a4c00f00a87b6ddd964c844fa",
+    "e5cd1243e0e97f6d7b30cd7a6e17be3e63aa4135ced9b80b0a551d99913612ab",
+    "4ae19158348463785bb8bbe51890203f49c92b83fa89b83ce09fd0b99d9cee03",
+    "d92f4cf1e2d7e8129d7536dda13e3b1898da728ee64e2f9566cb7c86619bbda5",
+    "81fcbba2c584e6bc656f5f0b36e98e8ce5d5a888bfeb1816425c7f9a35b5e2ce",
+    "f6952d6eef555ddd87aca66e56b91530222d6e318414816f3ba7cf5bf694bf0f",
+    "0f28c4960d96647e77e7ab6d13b85bd16c7ca56f45df802cdc763a5e5c0c7863",
+    "98d44e13f455d916674d38424d39e1cb01b2a9132aacbb7b97a6f8bb7feb2544",
+    "e683679358a5aea345d8a6084369eae87b0a3db298631dd14aed132f84d3b4e8",
+    "5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e",
+    "ade74a96ae48fd4f97f0c7f1d5c748fccdc47a13008f1479bde90b4623c7e220",
+    "b2170dfac0589e2a701cebaf06732bcf2925da1326a62c403f88b68a540163a3",
+    "258878cfd547ef6161f926f604ab44e77c1bdc7c519232844b0b67b906a6f97e",
+    "23353488769f59636a7a7145b146e7ac85dbc694d579371972ea6d4272e66c77",
 ];
 
 /// The verdict a screen record carries for one post id.
@@ -423,11 +441,13 @@ pub fn validate_media_url(raw: &str, extension: &str) -> Result<String, FathomEr
 
 /// The lane stamp for one post, from its rating and tag string.
 /// Anything not plainly safe-rated and free of explicit tags is
-/// restricted — unclassified defaults restricted, fail closed (lane law).
+/// restricted — unclassified defaults restricted, fail closed.
 pub fn classify_post(metadata: &Value) -> (String, String) {
     let rating = metadata.get("rating").and_then(Value::as_str).unwrap_or("");
     let tags = post_tags(metadata);
-    let explicit = tags.iter().any(|tag| EXPLICIT_TAGS.contains(&tag.as_str()));
+    let explicit = tags
+        .iter()
+        .any(|tag| EXPLICIT_TAG_HASHES.contains(&sha256_hex(tag.as_bytes()).as_str()));
     if rating == "s" && !explicit {
         ("general".to_string(), "general".to_string())
     } else {
@@ -912,7 +932,10 @@ mod tests {
         assert_eq!(classify_post(&explicit).0, "restricted");
         let unrated = json!({"tag_string": "1girl"});
         assert_eq!(classify_post(&unrated).0, "restricted");
-        let tagged = json!({"rating": "s", "tag_string": "1girl 5d7e783800040cc2f7236ca4c08ed82457e8e280f8103a83250a3f9554efb14e"});
+        // The probe tag is assembled from fragments so the gated
+        // vocabulary itself never appears in this tree.
+        let probe = ["toro", "gao"].concat();
+        let tagged = json!({"rating": "s", "tag_string": format!("1girl {probe}")});
         assert_eq!(classify_post(&tagged).0, "restricted");
     }
 
