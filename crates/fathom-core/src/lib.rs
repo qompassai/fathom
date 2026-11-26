@@ -18,6 +18,7 @@ pub mod process;
 pub mod profile;
 pub mod proof;
 pub mod registry;
+pub mod shield;
 
 /// Fathom's version, from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
