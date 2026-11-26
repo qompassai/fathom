@@ -19,3 +19,25 @@ instead of a persistent bridge process), SPEC.md names the deviation
 and the reason.
 
 Licensing of fathom: Apache-2.0. See LICENSE in this directory.
+
+ReversePort adaptation
+======================
+
+Two fathom components adapt methods from ReversePort
+(laaielichter/ReversePort, MIT License, (c) laaielichter and
+contributors), specifically its `port/` layer:
+
+- `infer_struct` (crates/fathom-native/src/structinfer.rs): the
+  sample-comparison format inference of ReversePort's `re_struct`
+  tool — constant runs with the big-endian give-back, length /
+  count / checksum / time / offset relations, record-table column
+  typing, trailer digests, and the Kaitai draft shape.
+- The injection shield (crates/fathom-core/src/shield.rs, wired
+  into the MCP result path in crates/fathom-mcp/src/server.rs):
+  the rule kinds, budgets, and `untrusted`-note semantics of
+  ReversePort's injection shield for tool results.
+
+The Rust implementations are estate-authored from the published
+specs and behavioral tests; no JavaScript source was copied into
+the tree. ReversePort's REA-derived deep-analysis engine was not
+used in any way.
