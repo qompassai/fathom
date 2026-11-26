@@ -105,6 +105,9 @@ mod tests {
         // decode_unity_textures).
         // 198 at the D-1651 MV/MZ landing, 2026-11-17: +1 for
         // the RPG Maker MV/MZ encrypted-image lane.
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 198);
+        // 199 at the ReversePort adaptation, 2026-11-26: +1
+        // for the infer_struct rung (games pack, provider
+        // struct).
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 199);
     }
 }

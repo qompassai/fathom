@@ -77,6 +77,7 @@ const PACKS: &[Pack] = &[
             "python",
             "renpy",
             "rpgmaker",
+            "struct",
             "ui",
             "unity",
             "unreal",

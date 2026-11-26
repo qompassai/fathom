@@ -38,6 +38,7 @@ pub mod resources;
 pub mod rpgmaker;
 pub mod sections;
 pub mod spec;
+pub mod structinfer;
 pub mod texture_codec;
 pub mod uasset;
 pub mod ui;
@@ -1411,6 +1412,38 @@ pub fn register(registry: &mut Registry) {
             ),
         ),
         Arc::new(ghidra::xrefs::get_xrefs_to),
+    );
+    registry.register(
+        descriptor(
+            "infer_struct",
+            ToolClass::Read,
+            "struct",
+            "Infer the layout of an unknown binary format from 2-32 sample \
+             files: constant/magic runs, lengths, counts, checksums, times, \
+             offsets, strings, record tables, trailers, and a Kaitai draft. \
+             The layout is a hypothesis from the samples, not a proof.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 32,
+                        "description": "Sample files of one format, under a target root. 3+ that differ in size find counts and lengths."
+                    },
+                    "max_kb": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 65536,
+                        "description": "KiB read per sample (default 1024). Whole-file checksums need the whole file under this."
+                    }
+                },
+                "required": ["files"],
+                "additionalProperties": false
+            }),
+        ),
+        Arc::new(structinfer::infer_struct),
     );
     registry.register(
         descriptor(
