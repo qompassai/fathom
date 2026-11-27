@@ -96,7 +96,10 @@ mod tests {
         // 192 at the D-1355 landing, 2026-11-11: +7 from the
         // audio-RE lane, the Unity expansion, and RPG Maker audio;
         // 193 at the D-1638 landing, 2026-11-16: +1 from the
-        // IoStore rung, extract_iostore_chunks).
-        assert_eq!(build_registry(&ToolProfile::full()).len(), 193);
+        // IoStore rung, extract_iostore_chunks; 195 at the
+        // media-discernment landing, 2026-11-27: +2 from the
+        // art provider, census_media_file and
+        // discern_hand_animation).
+        assert_eq!(build_registry(&ToolProfile::full()).len(), 195);
     }
 }

@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod base64;
+pub mod census;
 pub mod lumen;
 pub mod media;
 pub mod remap;
@@ -25,7 +26,7 @@ use serde_json::{Value, json};
 
 use fathom_core::config::Config;
 use fathom_core::error::{ErrorCode, FathomError};
-use fathom_core::evidence::{Confidence, Evidence, Finding, subject_for_file};
+use fathom_core::evidence::{Confidence, Evidence, Finding, sha256_hex, subject_for_file};
 use fathom_core::paths;
 use fathom_core::policy::ToolClass;
 use fathom_core::registry::{Registry, descriptor, require_str};
@@ -65,6 +66,41 @@ pub fn register(registry: &mut Registry) {
             lumen_schema(),
         ),
         Arc::new(apply_style_via_lumen),
+    );
+    registry.register(
+        descriptor(
+            "census_media_file",
+            ToolClass::Read,
+            "art",
+            "Census one image file (PNG, JPEG, or GIF, identified by its bytes, \
+             never its name): real format against the declared extension, \
+             dimensions, SHA-256, and the still-media census — unique colours \
+             and mean gradient at the standard 256 px downscale, tonal \
+             distribution and band steps, palette anchors, shading model, and \
+             the colour-zone evidence (blush, specular, hair mass) a \
+             hand-animation reading is built from. Deterministic: the same \
+             bytes always produce the same census",
+            census_schema(),
+        ),
+        Arc::new(census_media_file),
+    );
+    registry.register(
+        descriptor(
+            "discern_hand_animation",
+            ToolClass::Read,
+            "art",
+            "Discern how to hand-animate one still: the expression-register \
+             state it sits in (neutral_warm / flustered / overwhelmed, or \
+             undetermined) read from colour-zone evidence under a stated rule, \
+             the accent tracks it implies (blink, breath, expression travel, \
+             hair strands, specular/tear), the shading depth a drawn \
+             reproduction must hold against the family floor, and the named \
+             gaps a still cannot determine (timing, phases, travel path). \
+             Accepts a target file or the census envelope of \
+             census_media_file. Discerns and reports; generates nothing",
+            discern_schema(),
+        ),
+        Arc::new(discern_hand_animation),
     );
     registry.register(
         descriptor(
@@ -376,6 +412,297 @@ fn analyze_art_style(_: &Registry, config: &Config, args: &Value) -> Result<Valu
                 );
             }
         }
+    }
+    Ok(evidence.to_value())
+}
+
+fn census_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "Path under a configured target root"},
+        },
+        "required": ["target"],
+        "additionalProperties": false,
+    })
+}
+
+fn discern_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "census": {
+                "type": "object",
+                "description": "The census_media_file evidence envelope, or a flat object \
+                    carrying the census fields; mutually exclusive with target",
+            },
+            "target": {
+                "type": "string",
+                "description": "Path under a configured target root; mutually exclusive \
+                    with census",
+            },
+        },
+        "additionalProperties": false,
+    })
+}
+
+/// One target measured end to end, shared by the census tool
+/// and the discernment's file path so the two can never
+/// disagree about a file.
+struct MeasuredStill {
+    art: media::DecodedArt,
+    declared_extension: Option<String>,
+    path: PathBuf,
+    sha256: String,
+    size_bytes: u64,
+    still: census::StillFacts,
+}
+
+fn measure_target(config: &Config, target: &str) -> Result<MeasuredStill, FathomError> {
+    let (path, bytes) = read_art_target(config, target)?;
+    let art = decode(&bytes, target)?;
+    let declared_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_lowercase());
+    let still = census::measure_still(&art.first_frame, PALETTE_COLORS_DEFAULT as usize);
+    Ok(MeasuredStill {
+        art,
+        declared_extension,
+        path,
+        sha256: sha256_hex(&bytes),
+        size_bytes: bytes.len() as u64,
+        still,
+    })
+}
+
+/// Whether the declared extension names the sniffed format
+/// (`jpg` and `jpeg` are the same declaration). `None` when
+/// the file name declares nothing.
+fn format_matches_extension(format: &str, extension: Option<&str>) -> Option<bool> {
+    extension.map(|ext| match ext {
+        "jpg" | "jpeg" => format == "jpeg",
+        other => other == format,
+    })
+}
+
+fn census_media_file(_: &Registry, config: &Config, args: &Value) -> Result<Value, FathomError> {
+    let target = require_str(args, "target")?;
+    let measured = measure_target(config, target)?;
+    let subject = subject_for_file(&measured.path)?;
+    let facts = &measured.still.facts;
+
+    let mut evidence = Evidence::new("census_media_file", "art");
+    evidence.subject = Some(subject);
+    evidence.coverage.examined = 1;
+    evidence.coverage.total = 1;
+    evidence.add_finding(
+        Finding::new(
+            "media_census",
+            Confidence::Observed,
+            json!({
+                "declared_extension": measured.declared_extension,
+                "downscale_height": measured.still.downscale_height,
+                "downscale_width": measured.still.downscale_width,
+                "format": measured.art.format,
+                "format_matches_extension": format_matches_extension(
+                    measured.art.format,
+                    measured.declared_extension.as_deref(),
+                ),
+                "height": measured.art.first_frame.height(),
+                "mean_gradient_256w": (facts.gradient_256w * 100.0).round() / 100.0,
+                "sha256": measured.sha256,
+                "size_bytes": measured.size_bytes,
+                "unique_colours_256w": facts.unique_colours_256w,
+                "width": measured.art.first_frame.width(),
+            }),
+        )
+        .with_limitation(
+            "format is sniffed from the file's bytes, never its name; the \
+             downscale census composites alpha over black and counts exact \
+             RGB triples and the mean absolute per-channel horizontal \
+             gradient on an area-weighted box downscale to 256 px wide \
+             (height capped at 4096) — the Sloane determination's standard",
+        ),
+    );
+    evidence.add_finding(
+        Finding::new(
+            "palette",
+            Confidence::Observed,
+            json!({
+                "colors": measured.still.palette.iter().map(|entry| json!({
+                    "coverage": (entry.coverage * 10_000.0).round() / 10_000.0,
+                    "hex": entry.hex,
+                    "rgb": entry.rgb,
+                })).collect::<Vec<_>>(),
+                "sampled_pixels": measured.still.sampled_pixels,
+            }),
+        )
+        .with_limitation(
+            "median-cut clusters (8 anchors) over opaque pixels \
+             (alpha >= 128), sampled on a deterministic stride when the \
+             frame exceeds the sample bound; transparent pixels are not \
+             part of the palette",
+        ),
+    );
+    evidence.add_finding(
+        Finding::new(
+            "tonal",
+            Confidence::Derived,
+            json!({
+                "highlight_steps": facts.highlight_steps,
+                "lightness_p05": (measured.still.lightness_p05 * 10_000.0).round() / 10_000.0,
+                "lightness_p50": (measured.still.lightness_p50 * 10_000.0).round() / 10_000.0,
+                "lightness_p95": (measured.still.lightness_p95 * 10_000.0).round() / 10_000.0,
+                "mean_hue_deg": facts.mean_hue_deg.map(|h| (h * 100.0).round() / 100.0),
+                "mean_lightness": (measured.still.mean_lightness * 10_000.0).round() / 10_000.0,
+                "mean_saturation": (facts.mean_saturation * 10_000.0).round() / 10_000.0,
+                "shading_model": facts.shading_model,
+                "shadow_steps": facts.shadow_steps,
+                "tonal_steps": facts.tonal_steps,
+            }),
+        )
+        .with_limitation(
+            "tonal steps are populated bands of a 16-band lightness \
+             partition (a band is populated at >= 0.5% of sampled opaque \
+             pixels), split at the median band into shadow and highlight \
+             steps; the shading model follows the analyze_art_style \
+             classification rule (flat / cel / soft / mixed)",
+        ),
+    );
+    evidence.add_finding(
+        Finding::new(
+            "register_evidence",
+            Confidence::Derived,
+            json!({
+                "alpha_fraction": (facts.alpha_fraction * 10_000.0).round() / 10_000.0,
+                "blush_load": (facts.blush_load * 10_000.0).round() / 10_000.0,
+                "hair_mass_share": (facts.hair_mass_share * 10_000.0).round() / 10_000.0,
+                "specular_share": (facts.specular_share * 10_000.0).round() / 10_000.0,
+            }),
+        )
+        .with_limitation(
+            "colour-zone shares over sampled opaque pixels: blush is hue \
+             345..=360 or 0..=25 degrees at saturation >= 0.25 and \
+             lightness 0.30..=0.80; specular is lightness >= 0.93; hair \
+             mass is hue 12..=48 degrees at saturation >= 0.18 and \
+             lightness 0.08..=0.55. These are pixel shares, not face \
+             detections",
+        ),
+    );
+    if let Some(animation) = &measured.art.animation {
+        let total_ms: u64 = animation.durations_ms.iter().map(|d| u64::from(*d)).sum();
+        evidence.add_finding(Finding::new(
+            "animation",
+            Confidence::Observed,
+            json!({
+                "durations_ms": animation.durations_ms,
+                "frame_count": animation.frame_count,
+                "frames_truncated": animation.frames_truncated,
+                "holds": media::holds(&animation.durations_ms).iter().map(|(d, n)| json!({
+                    "duration_ms": d, "frames": n,
+                })).collect::<Vec<_>>(),
+                "loop": match animation.loop_behavior {
+                    LoopBehavior::Infinite => json!("infinite"),
+                    LoopBehavior::Iterations(n) => json!({"iterations": n}),
+                    LoopBehavior::PlayOnce => json!("play_once"),
+                },
+                "total_ms": total_ms,
+            }),
+        ));
+        if animation.frames_truncated {
+            evidence.coverage.exhaustive = false;
+        }
+    }
+    if let Some(reason) = &measured.art.timing_unknown {
+        evidence.add_unknown("animation_timing", reason.clone());
+    }
+    Ok(evidence.to_value())
+}
+
+fn discern_hand_animation(
+    _: &Registry,
+    config: &Config,
+    args: &Value,
+) -> Result<Value, FathomError> {
+    let has_target = args.get("target").is_some();
+    let has_census = args.get("census").is_some();
+    if has_target && has_census {
+        return Err(FathomError::new(
+            ErrorCode::InvalidRequest,
+            "arguments 'target' and 'census' are mutually exclusive",
+        ));
+    }
+    let (facts, subject) = if has_target {
+        let target = require_str(args, "target")?;
+        let measured = measure_target(config, target)?;
+        (
+            measured.still.facts.clone(),
+            Some(subject_for_file(&measured.path)?),
+        )
+    } else if has_census {
+        let census = args.get("census").expect("checked above");
+        let facts = census::facts_from_json(census)
+            .map_err(|message| FathomError::new(ErrorCode::InvalidRequest, message))?;
+        (facts, None)
+    } else {
+        return Err(FathomError::new(
+            ErrorCode::InvalidRequest,
+            "one of 'target' or 'census' is required",
+        ));
+    };
+    let reading = census::discern(&facts);
+
+    let mut evidence = Evidence::new("discern_hand_animation", "art");
+    evidence.subject = subject;
+    evidence.coverage.examined = 1;
+    evidence.coverage.total = 1;
+    evidence.add_finding(
+        Finding::new(
+            "register",
+            Confidence::Derived,
+            census::register_json(&facts, &reading),
+        )
+        .with_limitation(
+            "register rule: blush load >= 0.05 reads overwhelmed; \
+             >= 0.015 reads flustered; negligible blush (< 0.002) and \
+             specular (< 0.001) with a warm cast reads neutral_warm; \
+             anything else is undetermined. The state is read from \
+             colour-zone evidence only — it is not a face or expression \
+             detection",
+        ),
+    );
+    evidence.add_finding(
+        Finding::new(
+            "accent_tracks",
+            Confidence::Derived,
+            census::tracks_json(&reading),
+        )
+        .with_limitation(
+            "blink and breath are doctrine (the determination's held-cel \
+             minimum for any portrait base); hair strands are measured \
+             (hair-mass share >= 0.10) and specular/tear is measured \
+             (specular share >= 0.001); expression travel is measured \
+             when the register is non-neutral and doctrine when it is \
+             neutral_warm",
+        ),
+    );
+    evidence.add_finding(
+        Finding::new(
+            "shading_depth",
+            Confidence::Derived,
+            census::depth_json(&facts, &reading),
+        )
+        .with_limitation(
+            "the family floor is the Sloane determination's gate G3 \
+             (>= 12,000 unique colours and mean gradient >= 6.0 at the \
+             standard downscale); the required steps are the still's own \
+             measured tonal steps, which a drawn reproduction must hold \
+             to sit in the same family",
+        ),
+    );
+    for (aspect, reason) in &reading.gaps {
+        evidence.add_unknown(aspect.clone(), reason.clone());
     }
     Ok(evidence.to_value())
 }
@@ -908,5 +1235,235 @@ for line in sys.stdin:
             .unwrap()
             .to_rgba8();
         assert_eq!(out.get_pixel(0, 0), &image::Rgba([0, 0, 255, 255]));
+    }
+
+    /// A blush-coloured gradient still: every pixel sits in
+    /// the blush hue family, so the register evidence is
+    /// maximal while the colour count stays low — the two
+    /// readings must not contaminate each other.
+    fn blush_png(root: &Path) -> PathBuf {
+        let mut image = image::RgbaImage::new(64, 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let shift = (x / 8) as u8 * 4;
+                image.put_pixel(x, y, image::Rgba([230 - shift, 120, 120, 255]));
+            }
+        }
+        let path = root.join("blush.png");
+        image
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        path
+    }
+
+    #[test]
+    fn validation_census_media_file_png() {
+        let root = scratch("census");
+        let path = blush_png(&root);
+        let value = census_media_file(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        let findings = value["findings"].as_array().unwrap();
+        let census = findings
+            .iter()
+            .find(|f| f["kind"] == "media_census")
+            .expect("census finding");
+        assert_eq!(census["facts"]["format"], "png");
+        assert_eq!(census["facts"]["format_matches_extension"], true);
+        assert_eq!(census["facts"]["width"], 64);
+        assert!(census["facts"]["unique_colours_256w"].as_u64().unwrap() > 1);
+        assert_eq!(value["status"], "complete");
+        // Deterministic: a second census is byte-identical.
+        let again = census_media_file(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&value).unwrap(),
+            serde_json::to_string(&again).unwrap()
+        );
+    }
+
+    #[test]
+    fn validation_census_sniffs_jpeg_under_a_png_name() {
+        let root = scratch("census-sniff");
+        // JPEG bytes written to a .png name: the census must
+        // report the bytes' format and flag the mismatch.
+        // (The JPEG encoder takes RGB, not RGBA.)
+        let image = image::RgbImage::from_pixel(16, 16, image::Rgb([10, 200, 90]));
+        let path = root.join("lying.png");
+        image
+            .save_with_format(&path, image::ImageFormat::Jpeg)
+            .unwrap();
+        let value = census_media_file(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        let census = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["kind"] == "media_census")
+            .expect("census finding")
+            .clone();
+        assert_eq!(census["facts"]["format"], "jpeg");
+        assert_eq!(census["facts"]["declared_extension"], "png");
+        assert_eq!(census["facts"]["format_matches_extension"], false);
+    }
+
+    #[test]
+    fn validation_discern_chains_from_file_and_census() {
+        let root = scratch("discern-chain");
+        let path = blush_png(&root);
+        let cfg = config(&root, &[], &[]);
+        let envelope = census_media_file(
+            &Registry::new(),
+            &cfg,
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        let from_file = discern_hand_animation(
+            &Registry::new(),
+            &cfg,
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        let from_census =
+            discern_hand_animation(&Registry::new(), &cfg, &json!({"census": envelope})).unwrap();
+        let register_of = |value: &Value| {
+            value["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["kind"] == "register")
+                .expect("register finding")["facts"]["state"]
+                .clone()
+        };
+        assert_eq!(register_of(&from_file), "overwhelmed");
+        assert_eq!(register_of(&from_census), register_of(&from_file));
+        // The gaps are named, so the envelope is partial,
+        // never silently complete.
+        assert_eq!(from_file["status"], "partial");
+        assert!(!from_file["unknowns"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn adversarial_census_rejects_non_image() {
+        let root = scratch("census-text");
+        let path = root.join("notes.png");
+        std::fs::write(&path, b"definitely not an image").unwrap();
+        let error = census_media_file(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::ExecutionFailure);
+    }
+
+    #[test]
+    fn adversarial_census_rejects_truncated_png() {
+        let root = scratch("census-truncated");
+        let path = root.join("cut.png");
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&[0, 0, 0, 13]);
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&[0, 0]);
+        std::fs::write(&path, bytes).unwrap();
+        assert!(
+            census_media_file(
+                &Registry::new(),
+                &config(&root, &[], &[]),
+                &json!({"target": path.display().to_string()}),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn adversarial_census_refuses_real_webp_by_name() {
+        let root = scratch("census-webp");
+        // A genuine WebP signature: RIFF + size + WEBP + VP8.
+        // The provider reads PNG/JPEG/GIF only, and the refusal
+        // must name the format it will not read.
+        let path = root.join("photo.webp");
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&26_u32.to_le_bytes());
+        bytes.extend_from_slice(b"WEBPVP8 ");
+        bytes.extend_from_slice(&[0; 16]);
+        std::fs::write(&path, bytes).unwrap();
+        let error = census_media_file(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::UnsupportedTarget);
+    }
+
+    #[test]
+    fn adversarial_discern_argument_shape() {
+        let root = scratch("discern-args");
+        let cfg = config(&root, &[], &[]);
+        let error = discern_hand_animation(&Registry::new(), &cfg, &json!({})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        let error = discern_hand_animation(
+            &Registry::new(),
+            &cfg,
+            &json!({"target": "x.png", "census": {}}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        // A census object missing fields refuses by field name.
+        let error = discern_hand_animation(
+            &Registry::new(),
+            &cfg,
+            &json!({"census": {"blush_load": 0.5}}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidRequest);
+        assert!(
+            error.message.contains("alpha_fraction"),
+            "message: {}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn adversarial_discern_grey_still_has_no_register() {
+        let root = scratch("discern-grey");
+        let image = image::RgbaImage::from_pixel(32, 32, image::Rgba([128, 128, 128, 255]));
+        let path = root.join("grey.png");
+        image
+            .save_with_format(&path, image::ImageFormat::Png)
+            .unwrap();
+        let value = discern_hand_animation(
+            &Registry::new(),
+            &config(&root, &[], &[]),
+            &json!({"target": path.display().to_string()}),
+        )
+        .unwrap();
+        let register = value["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["kind"] == "register")
+            .expect("register finding")
+            .clone();
+        assert_eq!(register["facts"]["state"], "undetermined");
+        assert!(
+            value["unknowns"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|u| u["aspect"] == "register_state")
+        );
     }
 }

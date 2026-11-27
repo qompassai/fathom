@@ -108,9 +108,11 @@ Tools (alphabetical; status = this run):
 | `build_reconstruction_obligation_ledger` | read | core | built (§4.1) |
 | `build_video_guide` | read | video | built (YouTube-RE §6 amendment, 2026-10-27) |
 | `capture_process` | execute | process | built (pipes; PTY scaffolded) |
+| `census_media_file` | read | art | built (media-discernment amendment, 2026-11-27) |
 | `compare_artifacts` | read | core | built |
 | `delete_reconstruction_proof` | execute | core | built (§4.1) |
 | `delete_video_ingest` | execute | video | built (YouTube-RE §4.6 amendment, 2026-10-27) |
+| `discern_hand_animation` | read | art | built (media-discernment amendment, 2026-11-27) |
 | `export_evidence_bundle` | read | core | built |
 | `ingest_youtube_video` | observe | video | built (YouTube-RE §4 amendment, 2026-10-27) |
 | `inspect_android_apk` | read | android | built (ZIP64 + DEX/arsc decode are named walls) |
@@ -1003,6 +1005,41 @@ filenames, metadata, or priors.
   frames and an easing classification. Sprite-sheet geometry
   is claimed only when fully transparent gutter bands divide
   both axes into uniform cells; otherwise it is an unknown.
+- `census_media_file` (read): the still-media census. One image
+  file (PNG/JPEG/GIF), its format sniffed from bytes — the
+  declared extension is reported against the sniffed format,
+  never trusted. The census is a fixed standard: exact unique
+  colours and mean absolute per-channel horizontal gradient on
+  an area-weighted box downscale to 256 px wide (height capped
+  at 4096, alpha composited over black); tonal distribution
+  and steps from a 16-band lightness partition split at the
+  median band; median-cut palette anchors; the rule-classified
+  shading model; and the colour-zone evidence (blush,
+  specular, hair-mass pixel shares, each with its definition
+  in the finding's limitations) that a hand-animation reading
+  is built from. Deterministic: the same bytes always produce
+  the same census.
+- `discern_hand_animation` (read): the hand-animation
+  discernment over one still — a target file (chained through
+  the census) or a `census_media_file` envelope supplied by
+  the caller; the two paths share one measurement, so they
+  cannot disagree. It reports the expression-register state
+  the still sits in (neutral_warm / flustered / overwhelmed /
+  undetermined) read from colour-zone evidence under a rule
+  stated in the finding's limitations, the accent tracks the
+  still implies (blink and breath by the held-cel doctrine;
+  hair strands, specular/tear, and expression travel by
+  measured floors), and the shading depth a drawn
+  reproduction must hold against the family floor of the
+  Sloane determination's gate G3 (≥ 12,000 unique colours,
+  mean gradient ≥ 6.0 at the standard downscale). What a
+  still cannot determine — cadence and timing, blink phase,
+  hair sway phase, the expression travel path, face geometry
+  and expression semantics — is returned as named unknowns,
+  never as guesses. It discerns and reports; it generates no
+  media, and unsupported inputs refuse by name (a real WebP
+  is an UnsupportedTarget, a non-image an execution failure,
+  a malformed census an InvalidRequest naming the field).
 - `remap_palette` (execute): the native transform. Exact or
   nearest (RGB distance) remap to a caller palette or to
   another asset's measured palette; outputs are PNG files
